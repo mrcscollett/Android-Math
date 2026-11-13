@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Solution steps</title>
+<link rel="stylesheet" href="katex/katex.min.css">
+<style>
+  :root {
+    --text: #1b1b1f;
+    --muted: #5d5e67;
+    --card: #f1f0f7;
+    --outline: #c7c6d0;
+    --accent: #3f51b5;
+    --on-accent: #ffffff;
+    --accent-soft: #e0e3ff;
+    --ok: #1b6e3c;
+    --bad: #b3261e;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; padding: 0; background: transparent; }
+  body {
+    color: var(--text);
+    font: 15px/1.5 Roboto, system-ui, -apple-system, "Segoe UI", sans-serif;
+    overflow-wrap: break-word;
+  }
+  .katex { font-size: 1.12em; }
+
+  /* ---- preview mode ---- */
+  body.preview { display: flex; align-items: center; min-height: 100vh; }
+  #preview {
+    width: 100%; padding: 4px 12px; text-align: center;
+    overflow-x: auto; overflow-y: hidden; white-space: nowrap;
+  }
+  #preview .hint { color: var(--muted); font-size: 14px; white-space: normal; }
+
+  /* ---- solution mode ---- */
+  #solution { padding: 4px 16px 32px; }
+  .summary { color: var(--muted); margin: 8px 0 12px; }
+  .problem {
+    border: 1px solid var(--outline); border-radius: 12px;
+    padding: 6px 12px; margin-bottom: 12px;
+  }
+  .label {
+    font-size: 12px; font-weight: 500; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--muted);
+  }
+  .why { margin: 0 0 16px; }
+  .step {
+    display: grid; grid-template-columns: 28px 1fr; column-gap: 10px;
+    margin-bottom: 14px;
+  }
+  .num {
+    width: 28px; height: 28px; border-radius: 50%;
+    background: var(--accent-soft); color: var(--accent);
+    font-weight: 600; font-size: 13px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .body { min-width: 0; }
+  .title { font-weight: 600; margin: 3px 0 2px; }
+  .text { color: var(--text); }
+  .math {
+    overflow-x: auto; overflow-y: hidden;
+    padding: 8px 2px; margin: 2px 0;
+  }
+  .math .katex-display { margin: 0; text-align: left; }
+  .math .katex-display > .katex { text-align: left; }
+  details { margin-top: 2px; }
+  summary {
+    color: var(--accent); font-weight: 500; font-size: 14px;
+    cursor: pointer; list-style: none; padding: 6px 0; display: inline-block;
+  }
+  summary::-webkit-details-marker { display: none; }
+  summary::before { content: "\25B8\00a0"; }
+  details[open] > summary::before { content: "\25BE\00a0"; }
+  .sub {
+    border-left: 2px solid var(--outline); padding-left: 12px; margin: 2px 0 6px;
+  }
+  .sub .title { font-weight: 500; font-size: 14px; color: var(--muted); }
+
+  .step.answer .body {
+    background: var(--accent-soft); border-radius: 12px; padding: 8px 12px;
+  }
+  .step.answer .num { background: var(--accent); color: var(--on-accent); }
+  .step.check .num { background: transparent; font-size: 18px; }
+  .step.check-ok .num, .step.check-ok .title { color: var(--ok); }
+  .step.check-bad .num, .step.check-bad .title { color: var(--bad); }
+  .step.check-unknown .num, .step.check-unknown .title { color: var(--muted); }
+
+  .others { margin-top: 20px; border-top: 1px solid var(--outline); padding-top: 12px; }
+  .other { background: var(--card); border-radius: 12px; padding: 10px 12px; margin-top: 8px; }
+  .other .title { margin-top: 0; }
+  .error { color: var(--bad); }
+</style>
+</head>
+<body>
+<div id="preview" hidden></div>
+<div id="solution" hidden></div>
+
+<script src="katex/katex.min.js"></script>
+<script src="katex/auto-render.min.js"></script>
+<script>
+"use strict";
+var state = { result: null, methodId: null };
+
+function el(tag, cls, text) {
+  var node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text != null) node.textContent = text;
+  return node;
+}
+
+function displayMath(latex) {
+  var box = el("div", "math");
+  try {
+    katex.render(latex, box, { displayMode: true, throwOnError: false });
+  } catch (e) {
+    box.textContent = latex;
+  }
+  return box;
+}
+
+/** Text with inline \( ... \) math. */
+function prose(text, cls) {
+  var node = el("div", cls || "text", text);
+  renderMathInElement(node, {
+    delimiters: [{ left: "\\(", right: "\\)", display: false }],
+    throwOnError: false
+  });
+  return node;
+}
+
+/** Colours come from the app's Material theme so the page matches it. */
+function setTheme(colors) {
+  var root = document.documentElement.style;
+  Object.keys(colors).forEach(function (key) {
+    root.setProperty("--" + key, colors[key]);
+  });
+}
+
+function showPreview(latex, hint) {
+  document.body.className = "preview";
+  var box = document.getElementById("preview");
+  document.getElementById("solution").hidden = true;
+  box.hidden = false;
+  box.textContent = "";
+  if (latex) {
+    try {
+      katex.render(latex, box, { displayMode: false, throwOnError: false });
+    } catch (e) {
+      box.textContent = latex;
+    }
+  } else if (hint) {
+    box.appendChild(el("span", "hint", hint));
+  }
+}
+
+function showSolution(result, methodId) {
+  state.result = typeof result === "string" ? JSON.parse(result) : result;
+  showMethod(methodId);
+}
+
+function showMethod(methodId) {
+  var r = state.result;
+  if (!r) return;
+  document.body.className = "";
+  document.getElementById("preview").hidden = true;
+  var root = document.getElementById("solution");
+  root.hidden = false;
+  root.textContent = "";
+  window.scrollTo(0, 0);
+
+  if (!r.ok) {
+    root.appendChild(el("p", "error", r.error || "Something went wrong."));
+    return;
+  }
+
+  var problem = el("div", "problem");
+  problem.appendChild(el("div", "label", r.ic ? "Initial value problem" : "Equation"));
+  problem.appendChild(displayMath(r.ic ? r.input_latex + ",\\qquad " + r.ic.latex : r.input_latex));
+  root.appendChild(problem);
+
+  var applicable = r.methods.filter(function (m) { return m.applicable; });
+  var method = applicable.filter(function (m) { return m.id === methodId; })[0] || applicable[0];
+  state.methodId = method ? method.id : null;
+
+  if (!method) {
+    root.appendChild(prose(r.summary, "summary"));
+  } else {
+    root.appendChild(el("div", "label", "Why this method works here"));
+    root.appendChild(prose(method.reason, "why"));
+    method.steps.forEach(function (s, i) { root.appendChild(stepNode(s, i + 1)); });
+  }
+
+  var rest = r.methods.filter(function (m) { return !m.applicable; });
+  if (rest.length) {
+    var others = el("div", "others");
+    others.appendChild(el("div", "label", "Methods that do not apply"));
+    rest.forEach(function (m) {
+      var card = el("div", "other");
+      card.appendChild(el("div", "title", m.name));
+      card.appendChild(prose(m.reason));
+      others.appendChild(card);
+    });
+    root.appendChild(others);
+  }
+}
+
+function stepNode(s, number) {
+  var kind = s.kind || "";
+  var isCheck = kind.indexOf("check") === 0;
+  var node = el("div", "step" + (kind ? " " + kind : "") + (isCheck ? " check" : ""));
+  var mark = isCheck ? (kind === "check-ok" ? "✓" : kind === "check-bad" ? "✗" : "?") : String(number);
+  node.appendChild(el("div", "num", mark));
+  var body = el("div", "body");
+  body.appendChild(el("div", "title", s.title));
+  if (s.text) body.appendChild(prose(s.text));
+  (s.latex || []).forEach(function (line) { body.appendChild(displayMath(line)); });
+  if (s.substeps && s.substeps.length) {
+    var details = el("details");
+    details.appendChild(el("summary", null, "Show the working"));
+    s.substeps.forEach(function (sub) {
+      var box = el("div", "sub");
+      box.appendChild(el("div", "title", sub.title));
+      if (sub.text) box.appendChild(prose(sub.text));
+      (sub.latex || []).forEach(function (line) { box.appendChild(displayMath(line)); });
+      details.appendChild(box);
+    });
+    body.appendChild(details);
+  }
+  node.appendChild(body);
+  return node;
+}
+</script>
+</body>
+</html>

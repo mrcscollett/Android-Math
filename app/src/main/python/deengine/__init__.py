@@ -1,0 +1,6 @@
+"""Step-by-step differential equation engine.
+
+Pure Python + SymPy. Runs on-device through Chaquopy and can be exercised
+directly on a desktop (see tests/python).
+"""
+from .api import preview, solve, warmup  # noqa: F401

@@ -1,0 +1,17 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- A solution curve through a few slope marks. -->
+    <path
+        android:pathData="M32,74 C46,74 52,36 76,34"
+        android:strokeWidth="5"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M34,50 l8,-3 M36,62 l8,-1 M62,60 l6,-6 M64,72 l7,-4 M48,36 l8,-3"
+        android:strokeWidth="2.5"
+        android:strokeColor="#B3FFFFFF"
+        android:strokeLineCap="round" />
+</vector>
