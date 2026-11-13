@@ -39,16 +39,19 @@ import com.androidmath.core.Viewport
  * Slope field for y' = f(x, y) with solution curves on top.
  *
  * Drag to pan, pinch to zoom, tap to draw the numerical solution through
- * the tapped point. [exact] is the closed-form solution (evaluated with
- * constant [constant]); when it is null and an initial condition exists,
- * the curve through it is computed numerically instead.
+ * the tapped point (only when [rhs] is known, i.e. for first-order
+ * equations). [exact] is the closed-form solution, evaluated with the
+ * constants [constant] and [constant2]. [points] are the steps of a
+ * numerical method, drawn as a marked polyline.
  */
 @Composable
 fun GraphView(
     rhs: Expr?,
     exact: Expr?,
     constant: Double,
+    constant2: Double,
     ic: InitialCondition?,
+    points: DoubleArray?,
     tapped: List<Pair<Double, Double>>,
     resetKey: Int,
     onTap: (Double, Double) -> Unit,
@@ -61,7 +64,9 @@ fun GraphView(
     val w = size.width.toFloat()
     val h = size.height.toFloat()
     val vp = viewport ?: if (w > 0 && h > 0) {
-        Viewport.centred(ic?.x0 ?: 0.0, ic?.y0 ?: 0.0, 5.0, w, h).also { viewport = it }
+        val start = if (points != null && points.size >= 4) Viewport.fitting(points, w, h)
+        else Viewport.centred(ic?.x0 ?: 0.0, ic?.y0 ?: 0.0, 5.0, w, h)
+        start.also { viewport = it }
     } else null
 
     val colors = MaterialTheme.colorScheme
@@ -74,14 +79,21 @@ fun GraphView(
     val field = remember(rhs, vp, size) {
         if (rhs != null && vp != null) Plot.slopeField(rhs, vp, w, h, spacingPx, lengthPx) else FloatArray(0)
     }
-    val exactLines = remember(exact, constant, vp, size) {
+    val exactLines = remember(exact, constant, constant2, vp, size) {
         if (exact != null && vp != null) {
-            Plot.curve({ x -> exact.eval(x, 0.0, constant) }, vp, w, h, (w / 2).toInt().coerceIn(200, 1200))
+            Plot.curve(
+                { x -> exact.eval(x, 0.0, constant, constant2) },
+                vp, w, h, (w / 2).toInt().coerceIn(200, 1200),
+            )
         } else emptyList()
     }
-    val starts = remember(tapped.toList(), ic, exact) {
+    val pointLines = remember(points, vp, size) {
+        if (points != null && vp != null) Plot.path(points, vp, w, h) else emptyList()
+    }
+    val starts = remember(tapped.toList(), ic, exact, points) {
         val list = tapped.toMutableList()
-        if (ic != null && exact == null) list.add(0, ic.x0 to ic.y0)
+        // Without a formula or a computed table, show the curve through the initial point.
+        if (ic != null && exact == null && points == null) list.add(0, ic.x0 to ic.y0)
         list
     }
     val numericLines = remember(rhs, starts, vp, size) {
@@ -122,7 +134,8 @@ fun GraphView(
             },
     ) {
         if (vp == null) return@Canvas
-        drawGrid(vp, measurer, labelStyle, colors.outlineVariant, colors.onSurface)
+        val marker = ic?.let { Offset(vp.toPxX(it.x0, w), vp.toPxY(it.y0, h)) }
+        drawGrid(vp, measurer, labelStyle, colors.outlineVariant, colors.onSurface, marker)
 
         val fieldColor = colors.onSurfaceVariant.copy(alpha = 0.55f)
         val fieldStroke = 1.25.dp.toPx()
@@ -134,6 +147,18 @@ fun GraphView(
 
         drawPolylines(numericLines, colors.tertiary, 2.dp.toPx())
         drawPolylines(exactLines, colors.primary, 3.dp.toPx())
+        drawPolylines(pointLines, colors.tertiary, 2.dp.toPx())
+        if (points != null && points.size <= 2 * 80) {
+            // Few enough steps to mark each computed point.
+            var k = 0
+            while (k + 1 < points.size) {
+                drawCircle(
+                    colors.tertiary, 3.dp.toPx(),
+                    Offset(vp.toPxX(points[k], w), vp.toPxY(points[k + 1], h)),
+                )
+                k += 2
+            }
+        }
 
         for ((x0, y0) in tapped) {
             drawCircle(colors.tertiary, 4.dp.toPx(), Offset(vp.toPxX(x0, w), vp.toPxY(y0, h)))
@@ -162,6 +187,7 @@ private fun DrawScope.drawPolylines(lines: List<FloatArray>, color: Color, width
 
 private fun DrawScope.drawGrid(
     vp: Viewport, measurer: TextMeasurer, style: TextStyle, gridColor: Color, axisColor: Color,
+    marker: Offset?,
 ) {
     val w = size.width
     val h = size.height
@@ -193,6 +219,7 @@ private fun DrawScope.drawGrid(
         val top = (axisY + pad).coerceIn(pad, h - layout.size.height - pad)
         val left = vp.toPxX(x, w) - layout.size.width / 2f
         if (left < 0f || left + layout.size.width > w) continue
+        if (covers(marker, left, top, layout.size.width, layout.size.height, 8.dp.toPx())) continue
         drawText(layout, topLeft = Offset(left, top))
     }
     for (y in yTicks) {
@@ -201,6 +228,14 @@ private fun DrawScope.drawGrid(
         val left = (axisX + pad).coerceIn(pad, w - layout.size.width - pad)
         val top = vp.toPxY(y, h) - layout.size.height / 2f
         if (top < 0f || top + layout.size.height > h) continue
+        if (covers(marker, left, top, layout.size.width, layout.size.height, 8.dp.toPx())) continue
         drawText(layout, topLeft = Offset(left, top))
     }
+}
+
+/** True when a label at (left, top) would sit under the initial-condition marker. */
+private fun covers(marker: Offset?, left: Float, top: Float, width: Int, height: Int, pad: Float): Boolean {
+    if (marker == null) return false
+    return marker.x > left - pad && marker.x < left + width + pad &&
+        marker.y > top - pad && marker.y < top + height + pad
 }

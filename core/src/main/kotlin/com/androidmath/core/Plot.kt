@@ -41,6 +41,33 @@ data class Viewport(val xMin: Double, val xMax: Double, val yMin: Double, val yM
         const val MIN_SPAN = 1e-3
         const val MAX_SPAN = 1e5
 
+        /**
+         * A square-unit window that contains every point of [points]
+         * ([x0, y0, x1, y1, ...]) with a margin around them.
+         */
+        fun fitting(points: DoubleArray, widthPx: Float, heightPx: Float): Viewport {
+            var xLo = Double.POSITIVE_INFINITY
+            var xHi = Double.NEGATIVE_INFINITY
+            var yLo = Double.POSITIVE_INFINITY
+            var yHi = Double.NEGATIVE_INFINITY
+            var i = 0
+            while (i + 1 < points.size) {
+                val x = points[i]
+                val y = points[i + 1]
+                if (x.isFinite() && y.isFinite()) {
+                    xLo = minOf(xLo, x); xHi = maxOf(xHi, x)
+                    yLo = minOf(yLo, y); yHi = maxOf(yHi, y)
+                }
+                i += 2
+            }
+            if (xLo > xHi) return centred(0.0, 0.0, 5.0, widthPx, heightPx)
+            val aspect = if (heightPx > 0f) (widthPx / heightPx).toDouble() else 1.0
+            val needX = (xHi - xLo) / 2 * 1.4
+            val needY = (yHi - yLo) / 2 * 1.4 * aspect
+            val half = maxOf(needX, needY, 0.5).coerceAtMost(MAX_SPAN / 2)
+            return centred((xLo + xHi) / 2, (yLo + yHi) / 2, half, widthPx, heightPx)
+        }
+
         /** A window centred on (cx, cy) whose units are square for the given pixel size. */
         fun centred(cx: Double, cy: Double, halfWidth: Double, widthPx: Float, heightPx: Float): Viewport {
             val halfHeight = if (widthPx > 0f) halfWidth * heightPx / widthPx else halfWidth

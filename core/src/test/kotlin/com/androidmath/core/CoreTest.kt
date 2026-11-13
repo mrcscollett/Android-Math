@@ -32,6 +32,13 @@ class ExprTest {
         assertEquals(tan(1.0), eval("tan(C + x)", x = 0.25, c = 0.75), 1e-12)
     }
 
+    @Test fun twoConstants() {
+        val e = Expr.parseOrNull("C*exp(-2*x) + C2*exp(-x) + exp(x)/6")!!
+        assertEquals(2.0 + 3.0 + 1.0 / 6, e.eval(0.0, 0.0, 2.0, 3.0), 1e-12)
+        assertEquals(2.0 + 1.0 / 6, e.eval(0.0, 0.0, 2.0), 1e-12)
+        assertEquals(4.0, Expr.parseOrNull("C2**2")!!.eval(0.0, 0.0, 0.0, 2.0), 0.0)
+    }
+
     @Test fun unsupportedInputIsRejected() {
         assertNull(Expr.parseOrNull("erf(x)"))
         assertNull(Expr.parseOrNull("x +"))
@@ -117,6 +124,16 @@ class PlotTest {
         assertEquals(sq.width / 400, sq.height / 200, 1e-12)
     }
 
+    @Test fun viewportFitsPoints() {
+        val vp = Viewport.fitting(doubleArrayOf(0.0, 1.0, 0.5, 1.2, 1.0, 1.65), 400f, 800f)
+        assertTrue(vp.xMin < 0.0 && vp.xMax > 1.0)
+        assertTrue(vp.yMin < 1.0 && vp.yMax > 1.65)
+        assertEquals(vp.width / 400, vp.height / 800, 1e-12)
+        assertEquals(0.5, (vp.xMin + vp.xMax) / 2, 1e-12)
+        val empty = Viewport.fitting(DoubleArray(0), 400f, 400f)
+        assertEquals(10.0, empty.width, 1e-12)
+    }
+
     @Test fun slopeFieldSegmentsHaveFixedLength() {
         val f = Expr.parseOrNull("x*y")!!
         val segs = Plot.slopeField(f, Viewport(-3.0, 3.0, -3.0, 3.0), 300f, 300f, 30f, 12f)
@@ -175,5 +192,35 @@ class ModelTest {
         assertTrue(err.error!!.contains("Unknown symbol"))
         assertFalse(EngineJson.solveResult("not json").ok)
         assertEquals("y' = x", EngineJson.preview("""{"ok": true, "latex": "y' = x"}""").latex)
+    }
+
+    @Test fun parsesSecondOrder() {
+        val r = EngineJson.solveResult(fixture("second_order_ivp.json"))
+        assertTrue(r.ok)
+        assertEquals(2, r.order)
+        assertNull(r.rhsExpr)
+        assertEquals(0.0, r.ic!!.y1!!, 0.0)
+        assertEquals(listOf("undetermined", "variation", "laplace"), r.applicableMethods.map { it.id })
+        val values = r.applicableMethods.map {
+            Expr.parseOrNull(it.plot!!.particularExpr)!!.eval(1.0, 0.0, 0.0)
+        }
+        for (v in values) assertEquals(values[0], v, 1e-12)
+        val general = EngineJson.solveResult(fixture("second_order_general.json"))
+        val expr = Expr.parseOrNull(general.applicableMethods[0].plot!!.generalExpr)!!
+        // C1 cos x + C2 sin x at x = 0 is C1.
+        assertEquals(3.0, expr.eval(0.0, 0.0, 3.0, 7.0), 1e-12)
+    }
+
+    @Test fun parsesNumeric() {
+        val r = EngineJson.solveResult(fixture("numeric.json"))
+        assertEquals("numeric", r.kind)
+        assertEquals(listOf("euler", "heun", "rk4"), r.methods.map { it.id })
+        val pts = r.methods[0].plot!!.pointArray()
+        assertEquals(10, pts.size)
+        assertEquals(0.0, pts[0], 0.0)
+        assertEquals(1.0, pts[8], 1e-12)
+        assertEquals(1.419434, pts[9], 1e-6)
+        assertNotNull(Expr.parseOrNull(r.methods[0].plot!!.particularExpr))
+        assertEquals(2, EngineJson.preview("""{"ok": true, "latex": "", "order": 2}""").order)
     }
 }

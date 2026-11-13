@@ -4,8 +4,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "app", "s
 from deengine import solve
 
 def main():
-    args = sys.argv[1:] + ["", ""]
-    r = json.loads(solve(args[0], args[1], args[2]))
+    args = sys.argv[1:] + ["", "", ""]
+    r = json.loads(solve(args[0], args[1], args[2], args[3]))
     if not r["ok"]:
         print("ERROR:", r["error"]); return
     print(r["normal_latex"], "| rhs:", r["rhs_expr"], "|", r["summary"])

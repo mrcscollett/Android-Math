@@ -32,10 +32,12 @@ def tex(expr):
 def tex_side(expr, prob):
     """LaTeX for one side of the ODE with the y' term first, then y terms."""
     terms = sp.Add.make_args(expr)
-    if len(terms) < 2 or not expr.has(prob.yp):
+    if len(terms) < 2 or not expr.has(prob.yp, prob.ypp):
         return tex(expr)
     def rank(term):
-        return 0 if term.has(prob.yp) else (1 if term.has(prob.y) else 2)
+        if term.has(prob.ypp):
+            return 0
+        return 1 if term.has(prob.yp) else (2 if term.has(prob.y) else 3)
     ordered = sorted(terms, key=rank)
     out = tex(ordered[0])
     for term in ordered[1:]:
@@ -50,6 +52,17 @@ def dydx(prob):
     return r"\frac{dy}{d%s}" % prob.indep_name
 
 
+def too_complex(expr):
+    return sp.count_ops(expr) > MAX_OPS
+
+
+def signed(expr):
+    """LaTeX for '+ expr', written '- |expr|' when expr is negative."""
+    if expr.could_extract_minus_sign():
+        return "- %s" % tex(-expr)
+    return "+ %s" % tex(expr)
+
+
 def has_integral(expr):
     return expr.has(sp.Integral)
 
@@ -60,6 +73,8 @@ except (ValueError, RuntimeError):
     pass
 
 TIMEOUT = 12  # seconds allowed for any single SymPy call that might hang
+CHECK_TIMEOUT = 2  # symbolic verification falls back to a numerical check after this
+MAX_OPS = 70  # explicit formulas more complicated than this are left implicit
 
 
 def integrate(expr, var):
@@ -86,7 +101,8 @@ def plot_expr(expr, prob):
         for fn in expr.atoms(sp.Function):
             if type(fn).__name__ not in _PLOT_FUNCS:
                 return None
-        names = {prob.x: sp.Symbol("x"), prob.y: sp.Symbol("y"), prob.C: sp.Symbol("C")}
+        names = {prob.x: sp.Symbol("x"), prob.y: sp.Symbol("y"), prob.C: sp.Symbol("C"),
+                 prob.C1: sp.Symbol("C"), prob.C2: sp.Symbol("C2")}
         if not expr.free_symbols <= set(names):
             return None
         return sp.sstr(expr.xreplace(names))
@@ -156,25 +172,67 @@ def with_abs(expr):
     return expr.replace(lambda e: isinstance(e, sp.log), fix)
 
 
+def residual_status(residual, around=None):
+    """Classify how well `residual` vanishes.
+
+    Returns "symbolic", "numeric", "partial" (zero on part of the plane only),
+    "bad" or "unknown". The numerical test runs first because it is fast; the
+    symbolic proof is attempted only when the expression is small enough for
+    SymPy to simplify quickly.
+    """
+    if residual == 0:
+        return "symbolic"
+    small = sp.count_ops(residual) <= 150
+    if small:
+        try:
+            if sp.expand(residual) == 0:
+                return "symbolic"
+        except Exception:
+            pass
+    symbols = sorted(residual.free_symbols, key=lambda s: s.name)
+    good, bad = sample_zero(residual, symbols, around)
+    if bad:
+        return "partial" if (good >= 3 and around is None) else "bad"
+    if small and run_with_timeout(lambda: is_zero(residual), CHECK_TIMEOUT, False):
+        return "symbolic"
+    return "numeric" if good >= 3 else "unknown"
+
+
+def hard_to_solve(expr, var):
+    """True when solving expr = const for var means a cubic or worse."""
+    def degree(e):
+        try:
+            num, den = sp.fraction(sp.together(e))
+            return max(sp.Poly(num, var).degree(), sp.Poly(den, var).degree())
+        except Exception:
+            return None
+
+    top = degree(expr)
+    if top is not None:
+        return top > 2
+    for fn in expr.atoms(sp.Function):
+        for arg in fn.args:
+            inner = arg.args[0] if isinstance(arg, sp.Abs) else arg
+            d = degree(inner)
+            if d is not None and d > 2:
+                return True
+    return False
+
+
 def check_solution(prob, f, sol, x0=None, y0=None):
     """Substitute y = sol into y' = f. Returns (verified, note)."""
     residual = sp.diff(sol, prob.x) - f.subs(prob.y, sol)
     around = {prob.x: x0} if x0 is not None else None
-    if run_with_timeout(lambda: is_zero(residual), TIMEOUT, False):
-        how = "symbolically"
-    else:
-        symbols = sorted(residual.free_symbols, key=lambda s: s.name)
-        good, bad = sample_zero(residual, symbols, around)
-        if good >= 3 and bad == 0:
-            how = "numerically at sample points"
-        elif good >= 3 and x0 is None:
-            return None, ("Substituting back works on part of the plane only: "
-                          "this formula is one branch of the solution and holds "
-                          "where the roots and inverse functions in it are defined.")
-        elif bad:
-            return False, "Substituting back did not reproduce the equation."
-        else:
-            return None, "Could not be checked automatically."
+    status = residual_status(residual, around)
+    if status == "partial":
+        return None, ("Substituting back works on part of the plane only: "
+                      "this formula is one branch of the solution and holds "
+                      "where the roots and inverse functions in it are defined.")
+    if status == "bad":
+        return False, "Substituting back did not reproduce the equation."
+    if status == "unknown":
+        return None, "Could not be checked automatically."
+    how = "symbolically" if status == "symbolic" else "numerically at sample points"
     if x0 is not None:
         at = sol.subs(prob.x, x0)
         if not (is_zero(at - y0) or abs(complex(sp.N(at - y0))) < 1e-9):

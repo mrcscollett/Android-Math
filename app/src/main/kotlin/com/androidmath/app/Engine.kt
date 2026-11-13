@@ -45,14 +45,24 @@ object Engine {
     }
 
     /** Returns the raw JSON (for the steps view) and its parsed form. */
-    suspend fun solve(context: Context, text: String, x0: String, y0: String): Pair<String, SolveResult> =
-        withContext(dispatcher) {
-            try {
-                val json = module(context).callAttr("solve", text, x0, y0).toString()
-                json to EngineJson.solveResult(json)
-            } catch (e: Throwable) {
-                android.util.Log.e("Engine", "solve failed", e)
-                "" to SolveResult(ok = false, error = "The solver could not start.")
-            }
+    suspend fun solve(
+        context: Context, text: String, x0: String, y0: String, yPrime0: String,
+    ): Pair<String, SolveResult> = call(context, "solve", text, x0, y0, yPrime0)
+
+    /** Euler, improved Euler and RK4 tables for y' = f(x, y), y(x0) = y0. */
+    suspend fun numeric(
+        context: Context, text: String, x0: String, y0: String, step: String, count: String,
+    ): Pair<String, SolveResult> = call(context, "numeric", text, x0, y0, step, count)
+
+    private suspend fun call(
+        context: Context, function: String, vararg args: String,
+    ): Pair<String, SolveResult> = withContext(dispatcher) {
+        try {
+            val json = module(context).callAttr(function, *args).toString()
+            json to EngineJson.solveResult(json)
+        } catch (e: Throwable) {
+            android.util.Log.e("Engine", "$function failed", e)
+            "" to SolveResult(ok = false, error = "The solver could not start.")
         }
+    }
 }

@@ -6,9 +6,10 @@ steps, general_latex, particular_latex, plot, verified, verify_note.
 import sympy as sp
 from sympy.solvers.ode import constantsimp
 
-from .util import (TIMEOUT, check_solution, dydx, has_integral, integrate,
-                   is_zero, plot_expr, run_with_timeout, sample_zero, tex,
-                   with_abs)
+from .util import (TIMEOUT, check_solution, dydx, hard_to_solve, has_integral, integrate,
+                   is_zero, plot_expr, residual_status, run_with_timeout, sample_zero,
+                   signed,
+                   tex, too_complex, with_abs)
 
 
 def step(title, text, latex=None, substeps=None):
@@ -253,9 +254,10 @@ def separable(prob, f, ic):
     if direct:
         branches = [G_show + C]
     else:
-        raw = run_with_timeout(lambda: sp.solve(implicit, y), TIMEOUT, [])
+        raw = [] if hard_to_solve(H, y) else run_with_timeout(
+            lambda: sp.solve(implicit, y), TIMEOUT, [])
         for sol in raw:
-            if sol.has(y) or sol.has(sp.I) or has_integral(sol):
+            if sol.has(y) or sol.has(sp.I) or has_integral(sol) or too_complex(sol):
                 continue
             try:
                 simp = _absorb_exp(constantsimp(sol, {C}), C)
@@ -486,14 +488,465 @@ def _tidy(expr, C):
     return best
 
 
-METHODS = (separable, linear)
+# --------------------------------------------------------------------------
+# Exact equations
+# --------------------------------------------------------------------------
+
+def exact(prob, f, ic):
+    name = "Exact equation"
+    x, y, C = prob.x, prob.y, prob.C
+    xn = prob.indep_name
+
+    num, den = sp.fraction(sp.together(f))
+    candidates = []
+    if getattr(prob, "user_form", None):
+        candidates.append(prob.user_form)
+    candidates.append((sp.expand(-num), sp.expand(den)))
+
+    chosen = None
+    for M, N in candidates:
+        if is_zero(sp.diff(M, y) - sp.diff(N, x)):
+            chosen = (M, N, None, None)
+            break
+    plain = separable(prob, f, None)["applicable"] or linear(prob, f, None)["applicable"]
+    if chosen is None and not plain:
+        # Look for an integrating factor that depends on one variable only.
+        for M, N in candidates:
+            gap = sp.diff(M, y) - sp.diff(N, x)
+            kx = sp.simplify(gap / N) if N != 0 else None
+            if kx is not None and not kx.has(y):
+                mu = sp.simplify(sp.exp(integrate(kx, x)))
+                if not has_integral(mu):
+                    chosen = (M, N, mu, x)
+                    break
+            ky = sp.simplify(-gap / M) if M != 0 else None
+            if ky is not None and not ky.has(x):
+                mu = sp.simplify(sp.exp(integrate(ky, y)))
+                if not has_integral(mu):
+                    chosen = (M, N, mu, y)
+                    break
+    if chosen is None:
+        M, N = candidates[0]
+        return _not_applicable(
+            "exact", name,
+            "Written as \\(M\\,d%s + N\\,dy = 0\\), exactness needs "
+            "\\(\\partial M/\\partial y = \\partial N/\\partial %s\\). Here they are "
+            "\\(%s\\) and \\(%s\\)%s."
+            % (xn, xn, tex(sp.diff(M, y)), tex(sp.diff(N, x)),
+               ", and the simpler methods above already apply" if plain
+               else ", and no integrating factor in one variable fixes it"))
+
+    M, N, mu, mu_var = chosen
+    steps = [step(
+        "Write as M d%s + N dy = 0" % xn,
+        "Move everything to one side and read off \\(M\\) and \\(N\\).",
+        ["%s\\,d%s + %s\\,dy = 0" % (_paren(M), xn, _paren(N)),
+         "M = %s,\\qquad N = %s" % (tex(M), tex(N))])]
+    my, nx = sp.simplify(sp.diff(M, y)), sp.simplify(sp.diff(N, x))
+    if mu is None:
+        reason = ("In the form \\(M\\,d%s + N\\,dy = 0\\) the cross-derivatives "
+                  "are equal, so the left side is the total differential of "
+                  "some \\(F(%s, y)\\)." % (xn, xn))
+        steps.append(step(
+            "Test for exactness",
+            "The equation is exact when these two partial derivatives agree.",
+            ["\\frac{\\partial M}{\\partial y} = %s,\\qquad "
+             "\\frac{\\partial N}{\\partial %s} = %s" % (tex(my), xn, tex(nx))]))
+    else:
+        vn = xn if mu_var == x else "y"
+        reason = ("It is not exact as written, but multiplying by the "
+                  "integrating factor \\(\\mu(%s) = %s\\) makes it exact."
+                  % (vn, tex(mu)))
+        ratio = ("\\frac{M_y - N_%s}{N}" % xn) if mu_var == x else ("\\frac{N_%s - M_y}{M}" % xn)
+        steps.append(step(
+            "Test for exactness",
+            "The partial derivatives differ, so the equation is not exact yet. "
+            "But \\(%s\\) depends only on \\(%s\\), so an integrating factor "
+            "\\(\\mu(%s)\\) exists." % (ratio, vn, vn),
+            ["\\frac{\\partial M}{\\partial y} = %s,\\qquad "
+             "\\frac{\\partial N}{\\partial %s} = %s" % (tex(my), xn, tex(nx)),
+             "\\mu(%s) = %s" % (vn, tex(mu))]))
+        M, N = sp.simplify(mu * M), sp.simplify(mu * N)
+        steps.append(step(
+            "Multiply by the integrating factor",
+            "The new \\(M\\) and \\(N\\) now pass the exactness test.",
+            ["%s\\,d%s + %s\\,dy = 0" % (_paren(M), xn, _paren(N))]))
+
+    part = integrate(M, x)
+    if has_integral(part):
+        return _not_applicable("exact", name,
+                               "The integral of \\(M\\) has no elementary closed form.")
+    dg = sp.simplify(N - sp.diff(part, y))
+    if dg.has(x):
+        return _not_applicable("exact", name,
+                               "The potential function could not be completed.")
+    gy = integrate(dg, y)
+    if has_integral(gy):
+        return _not_applicable("exact", name,
+                               "The integral for \\(g(y)\\) has no elementary closed form.")
+    F = sp.simplify(with_abs(part) + with_abs(gy))
+    steps.append(step(
+        "Integrate M with respect to %s" % xn,
+        "Find \\(F\\) with \\(\\partial F/\\partial %s = M\\). The \"constant\" "
+        "of integration may depend on \\(y\\), so call it \\(g(y)\\)." % xn,
+        ["F = \\int %s\\,d%s = %s + g(y)" % (_paren(M), xn, tex(with_abs(part)))]))
+    steps.append(step(
+        "Find g(y)",
+        "Differentiate \\(F\\) with respect to \\(y\\) and set it equal to "
+        "\\(N\\). The \\(%s\\) terms cancel, leaving \\(g'(y)\\)." % xn,
+        ["g'(y) = %s" % tex(dg), "g(y) = %s" % tex(with_abs(gy))]))
+    implicit_tex = "%s = C" % tex(F)
+    steps.append(step(
+        "Write the implicit solution",
+        "Solutions are the level curves \\(F(%s, y) = C\\)." % xn,
+        [implicit_tex]))
+
+    branches = []
+    raw = [] if hard_to_solve(F, y) else run_with_timeout(
+        lambda: sp.solve(sp.Eq(F, C), y), TIMEOUT, [])
+    for sol in raw or []:
+        if (sol.has(y) or sol.has(sp.I) or has_integral(sol) or too_complex(sol)
+                or not _is_real_branch(sol, prob)):
+            continue
+        branches.append(sol)
+    general, general_tex = None, implicit_tex
+    if branches:
+        text = "This can be solved for \\(y\\)."
+        if len(branches) > 1:
+            text += " There is more than one branch; an initial condition picks one."
+        steps.append(step("Solve for y", text, [_eq("y", b) for b in branches]))
+        general = branches[0] if len(branches) == 1 else None
+        general_tex = ",\\quad ".join(_eq("y", b) for b in branches)
+
+    particular, particular_tex = None, None
+    if ic:
+        x0, y0 = ic
+        found = _solve_constant(branches, prob, f, x0, y0) if branches else None
+        if found:
+            eq_tex, value, particular = found
+            steps.append(step(
+                "Apply the initial condition",
+                "Substitute \\(%s = %s\\) and \\(y = %s\\), then solve for \\(C\\)."
+                % (xn, tex(x0), tex(y0)),
+                [_eq("y", particular)],
+                [step("Solve for C", "", [eq_tex, _eq("C", value)])]))
+        else:
+            value = sp.simplify(F.subs({x: x0, y: y0}))
+            particular_tex = "%s = %s" % (tex(F), tex(value))
+            steps.append(step(
+                "Apply the initial condition",
+                "Substitute \\(%s = %s\\) and \\(y = %s\\) into \\(F\\) to find \\(C\\)."
+                % (xn, tex(x0), tex(y0)),
+                [_eq("C", value), particular_tex]))
+
+    extra = None
+    if general is None and particular is None:
+        ok = is_zero(-sp.diff(F, x) / sp.diff(F, y) - f)
+        extra = (True, "Checked by differentiating the implicit solution.") if ok else None
+    return _result("exact", name, reason, steps, general, particular, prob, f, ic,
+                   general_tex=general_tex, particular_tex=particular_tex,
+                   extra_verify=extra)
+
+
+# --------------------------------------------------------------------------
+# Bernoulli equations
+# --------------------------------------------------------------------------
+
+def bernoulli(prob, f, ic):
+    name = "Bernoulli substitution"
+    x, y, C = prob.x, prob.y, prob.C
+    xn = prob.indep_name
+    form = "\\(y' + p(%s)\\,y = q(%s)\\,y^n\\)" % (xn, xn)
+
+    try:
+        groups = sp.collect(sp.expand(f), y, evaluate=False)
+    except Exception:
+        groups = {}
+    power = None
+    p = sp.Integer(0)
+    q = None
+    ok = bool(groups)
+    for key, coef in groups.items():
+        if coef.has(y):
+            ok = False
+        elif key == y:
+            p = -coef
+        elif key.is_Pow and key.base == y and key.exp.is_number and not key.exp.has(y) and q is None:
+            power, q = key.exp, coef
+        else:
+            ok = False
+    if not ok or q is None or power in (0, 1):
+        return _not_applicable(
+            "bernoulli", name,
+            "The equation does not have the form %s with \\(n \\ne 0, 1\\)." % form)
+    p, q, n = sp.simplify(p), sp.simplify(q), power
+
+    k = 1 - n
+    steps = [step(
+        "Write in Bernoulli form",
+        "Collect the terms so the equation reads %s." % form,
+        ["%s %s = %s\\,y^{%s}" % (dydx(prob), _signed_term(p), _paren(q), tex(n)),
+         "p = %s,\\qquad q = %s,\\qquad n = %s" % (tex(p), tex(q), tex(n))])]
+    steps.append(step(
+        "Substitute v = y^(1-n)",
+        "Let \\(v = y^{%s}\\). Dividing the equation by \\(y^{%s}\\) and using "
+        "\\(v' = %s\\,y^{%s}\\,y'\\) turns it into a linear equation in \\(v\\)."
+        % (tex(k), tex(n), tex(k), tex(-n)),
+        ["v' + %s\\,v = %s" % (_paren(sp.simplify(k * p)), tex(sp.simplify(k * q)))]))
+
+    P = integrate(sp.simplify(k * p), x)
+    if has_integral(P):
+        return _not_applicable("bernoulli", name,
+                               "The integrating factor for the linear equation in "
+                               "\\(v\\) has no elementary closed form.")
+    mu = sp.powsimp(sp.simplify(sp.exp(P)))
+    R = integrate(sp.simplify(mu * k * q), x)
+    if has_integral(R):
+        return _not_applicable("bernoulli", name,
+                               "The integral in the linear equation for \\(v\\) "
+                               "has no elementary closed form.")
+    R = with_abs(R)
+    v = _tidy((R + C) / mu, C)
+    steps.append(step(
+        "Solve the linear equation",
+        "Use the integrating factor \\(\\mu = e^{\\int (1-n)p\\,d%s}\\), as in "
+        "the integrating-factor method." % xn,
+        [_eq("v", v)],
+        [step("Integrating factor", "", ["\\mu = %s" % tex(mu)]),
+         step("Integrate", "", ["%s\\,v = %s" % (_paren(mu), _plus_c(R))])]))
+
+    raw = run_with_timeout(lambda: sp.solve(sp.Eq(y**k, v), y), TIMEOUT, [])
+    branches = [b for b in (raw or [])
+                if not b.has(y) and not b.has(sp.I) and _is_real_branch(b, prob)]
+    if not branches:
+        branches = [v ** (1 / k)]
+    text = "Undo the substitution: \\(y^{%s} = v\\)." % tex(k)
+    if n.is_positive:
+        text += " Dividing by a power of \\(y\\) also lost the solution \\(y = 0\\)."
+    if len(branches) > 1:
+        text += " There is more than one branch; an initial condition picks one."
+    steps.append(step("Return to y", text, [_eq("y", b) for b in branches]))
+    general = branches[0] if len(branches) == 1 else None
+    general_tex = ",\\quad ".join(_eq("y", b) for b in branches)
+
+    particular = None
+    if ic:
+        x0, y0 = ic
+        found = _solve_constant(branches, prob, f, x0, y0)
+        if found:
+            eq_tex, value, particular = found
+            steps.append(step(
+                "Apply the initial condition",
+                "Substitute \\(%s = %s\\) and \\(y = %s\\), then solve for \\(C\\)."
+                % (xn, tex(x0), tex(y0)),
+                [_eq("y", particular)],
+                [step("Solve for C", "", [eq_tex, _eq("C", value)])]))
+        elif y0 == 0 and n.is_positive:
+            particular = sp.Integer(0)
+            steps.append(step("Apply the initial condition",
+                              "The initial value is 0, which is the constant "
+                              "solution \\(y = 0\\).", [_eq("y", 0)]))
+        else:
+            steps.append(step("Apply the initial condition",
+                              "No value of \\(C\\) fits this initial condition "
+                              "on the branches found."))
+    out = _result("bernoulli", name,
+                  "It has the form %s with \\(n = %s\\)." % (form, tex(n)),
+                  steps, general, particular, prob, f, ic, general_tex=general_tex)
+    if general is None and particular is None and len(branches) > 1:
+        if all(check_solution(prob, f, b)[0] is not False for b in branches):
+            out["verified"] = True
+            out["verify_note"] = "Each branch was checked by substituting back into the equation."
+    return out
+
+
+# --------------------------------------------------------------------------
+# Homogeneous equations (y = v x)
+# --------------------------------------------------------------------------
+
+def homogeneous(prob, f, ic):
+    name = "Homogeneous substitution (y = vx)"
+    x, y, C = prob.x, prob.y, prob.C
+    xn = prob.indep_name
+    v = sp.Symbol("v", real=True)
+
+    xpos = sp.Symbol("xpos", positive=True)
+    try:
+        Fv = sp.simplify(f.subs(y, v * x).subs(x, xpos))
+    except Exception:
+        Fv = None
+    if Fv is None or Fv.has(xpos):
+        return _not_applicable(
+            "homogeneous", name,
+            "The right-hand side cannot be written as a function of "
+            "\\(y/%s\\) alone." % xn)
+    phi = sp.simplify(Fv - v)
+    if phi == 0 or not f.has(x):
+        return _not_applicable(
+            "homogeneous", name,
+            "The substitution gives nothing new here; the simpler methods apply.")
+
+    if ic and ic[0] == 0:
+        return _not_applicable(
+            "homogeneous", name,
+            "The substitution \\(y = v%s\\) divides by \\(%s\\), so it cannot "
+            "use an initial condition at \\(%s = 0\\)." % (xn, xn, xn))
+
+    steps = [step(
+        "Recognise the form",
+        "The right-hand side depends only on the ratio \\(y/%s\\)." % xn,
+        ["%s = F\\!\\left(\\frac{y}{%s}\\right),\\qquad F(v) = %s"
+         % (dydx(prob), xn, tex(Fv))])]
+    steps.append(step(
+        "Substitute y = v%s" % xn,
+        "With \\(y = v%s\\), the product rule gives \\(y' = v + %s\\,v'\\). "
+        "The equation becomes separable in \\(v\\) and \\(%s\\)." % (xn, xn, xn),
+        ["v + %s\\,\\frac{dv}{d%s} = %s" % (xn, xn, tex(Fv)),
+         "%s\\,\\frac{dv}{d%s} = %s" % (xn, xn, tex(phi))]))
+    lines = []
+    try:
+        lines = [r for r in sp.solve(phi, v) if r.is_real is not False and not r.free_symbols]
+    except Exception:
+        lines = []
+    if lines:
+        steps.append(step(
+            "Note the straight-line solutions",
+            "Where the right side is zero, \\(v\\) is constant, so these lines "
+            "through the origin are solutions on their own:",
+            [",\\quad ".join(_eq("y", r * x) for r in lines)]))
+    inv = sp.simplify(1 / phi)
+    H = integrate(inv, v)
+    if has_integral(H):
+        return _not_applicable("homogeneous", name,
+                               "The integral in \\(v\\) has no elementary closed form.")
+    H_show = with_abs(H)
+    steps.append(step(
+        "Separate and integrate",
+        "Put the \\(v\\) terms on the left and the \\(%s\\) terms on the right, "
+        "then integrate." % xn,
+        ["%s\\,dv = \\frac{1}{%s}\\,d%s" % (_paren(inv), xn, xn),
+         "%s = \\ln\\left|%s\\right| + C" % (tex(H_show), xn)]))
+    back = H_show.subs(v, y / x)
+    implicit_tex = "%s = \\ln\\left|%s\\right| + C" % (tex(back), xn)
+    steps.append(step(
+        "Substitute back v = y/%s" % xn, "", [implicit_tex]))
+
+    branches, renamed = [], False
+    raw = [] if hard_to_solve(H, v) else run_with_timeout(
+        lambda: sp.solve(sp.Eq(H, sp.log(x) + C), v), TIMEOUT, [])
+    for sol in raw or []:
+        if sol.has(v) or sol.has(sp.I) or has_integral(sol):
+            continue
+        cand = sp.simplify(x * sol)
+        try:
+            simp = _absorb_exp(constantsimp(cand, {C}), C)
+        except Exception:
+            simp = cand
+        # A constant still trapped inside an exponential reads badly; the
+        # implicit form is clearer than such a formula.
+        trapped = any(e.has(C) for e in simp.atoms(sp.exp))
+        if trapped or too_complex(simp) or not _is_real_branch(simp, prob):
+            continue
+        if simp != cand:
+            renamed = True
+        branches.append(_prefer_abs(simp, prob, f))
+    general, general_tex = None, implicit_tex
+    if branches:
+        text = "Solve for \\(y\\)."
+        if renamed:
+            text += (" An expression made only of the arbitrary constant is "
+                     "itself an arbitrary constant, so it is renamed \\(C\\).")
+        if len(branches) > 1:
+            text += " There is more than one branch; an initial condition picks one."
+        steps.append(step("Solve for y", text, [_eq("y", b) for b in branches]))
+        general = branches[0] if len(branches) == 1 else None
+        general_tex = ",\\quad ".join(_eq("y", b) for b in branches)
+
+    particular, particular_tex = None, None
+    if ic:
+        x0, y0 = ic
+        if x0 != 0 and any(is_zero(r * x0 - y0) for r in lines):
+            line = [r for r in lines if is_zero(r * x0 - y0)][0] * x
+            particular = line
+            steps.append(step("Apply the initial condition",
+                              "The initial point lies on one of the straight-line "
+                              "solutions.", [_eq("y", line)]))
+        else:
+            found = _solve_constant(branches, prob, f, x0, y0) if branches else None
+            if found:
+                eq_tex, value, particular = found
+                steps.append(step(
+                    "Apply the initial condition",
+                    "Substitute \\(%s = %s\\) and \\(y = %s\\), then solve for \\(C\\)."
+                    % (xn, tex(x0), tex(y0)),
+                    [_eq("y", particular)],
+                    [step("Solve for C", "", [eq_tex, _eq("C", value)])]))
+            else:
+                try:
+                    value = sp.simplify(back.subs({x: x0, y: y0}) - sp.log(sp.Abs(x0)))
+                    usable = value.is_real is not False and not value.has(sp.zoo, sp.nan, sp.oo)
+                except Exception:
+                    usable = False
+                if usable:
+                    particular_tex = "%s = \\ln\\left|%s\\right| %s" % (tex(back), xn, signed(value))
+                    steps.append(step(
+                        "Apply the initial condition",
+                        "Substitute the initial point into the implicit solution to find \\(C\\).",
+                        [_eq("C", value), particular_tex]))
+                else:
+                    steps.append(step("Apply the initial condition",
+                                      "No value of \\(C\\) fits this initial condition."))
+    extra = None
+    if general is None and particular is None:
+        # Differentiate the implicit relation and compare the slope with f.
+        relation = H.subs(v, y / x) - sp.log(x)
+        slope = -sp.diff(relation, x) / sp.diff(relation, y)
+        if residual_status(slope - f) in ("symbolic", "numeric"):
+            extra = (True, "Checked by differentiating the implicit solution.")
+        else:
+            extra = (None, "The implicit solution was not checked automatically.")
+    out = _result("homogeneous", name,
+                  "The right-hand side is a function of \\(y/%s\\) only." % xn,
+                  steps, general, particular, prob, f, ic,
+                  general_tex=general_tex, particular_tex=particular_tex,
+                  extra_verify=extra)
+    if general is None and particular is None and len(branches) > 1:
+        if all(check_solution(prob, f, b)[0] is not False for b in branches):
+            out["verified"] = True
+            out["verify_note"] = "Each branch was checked by substituting back into the equation."
+    return out
+
+
+# --------------------------------------------------------------------------
+# Laplace transform (linear, constant coefficient, condition at 0)
+# --------------------------------------------------------------------------
+
+def laplace(prob, f, ic):
+    from . import laplace as lt
+    x, y = prob.x, prob.y
+    a = sp.simplify(sp.diff(f, y))
+    q = sp.simplify(f - a * y)
+    if a.has(y) or q.has(y):
+        return _not_applicable("laplace", lt.NAME, "The method needs a linear equation.")
+    blocked = lt.why_not(prob, not a.has(x), ic)
+    if blocked:
+        return _not_applicable("laplace", lt.NAME, blocked)
+    steps, sol = lt.solve_ivp(prob, sp.Integer(0), sp.Integer(1), -a, q, ic[1])
+    if steps is None:
+        return _not_applicable("laplace", lt.NAME, sol)
+    steps.insert(0, step(
+        "Write in standard form", "Move the \\(y\\) term to the left.",
+        ["y' %s = %s" % (_signed_term(-a), tex(q))]))
+    return _result("laplace", lt.NAME,
+                   "The equation is linear with constant coefficients and the "
+                   "initial condition is given at 0.",
+                   steps, None, sol, prob, f, ic)
+
+
+METHODS = (separable, linear, exact, bernoulli, homogeneous, laplace)
 
 _OTHER_TYPES = (
-    ("1st_exact", "exact"),
-    ("Bernoulli", "Bernoulli"),
-    ("1st_homogeneous_coeff", "homogeneous (substitution y = vx)"),
     ("Riccati", "Riccati"),
-    ("1st_linear", "linear"),
     ("separable_reduced", "reducible to separable by substitution"),
     ("linear_coefficients", "linear coefficients (shift substitution)"),
 )

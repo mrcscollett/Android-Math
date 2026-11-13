@@ -3,14 +3,17 @@ package com.androidmath.core
 import kotlin.math.*
 
 /**
- * A compiled real-valued expression in x, y and the constant C.
+ * A compiled real-valued expression in x, y and the constants C and C2.
  *
  * The grammar is the subset of Python/SymPy syntax the engine emits for
- * plotting: numbers, x, y, C, pi, E, + - * / **, parentheses and the
+ * plotting: numbers, x, y, C, C2, pi, E, + - * / **, parentheses and the
  * functions listed in [FUNCTIONS].
  */
 fun interface Expr {
-    fun eval(x: Double, y: Double, c: Double): Double
+    /** [c] and [c2] are the arbitrary constants (C, or C1 and C2 for second order). */
+    fun eval(x: Double, y: Double, c: Double, c2: Double): Double
+
+    fun eval(x: Double, y: Double, c: Double): Double = eval(x, y, c, 0.0)
 
     companion object {
         /** Returns null when the text uses anything the evaluator does not support. */
@@ -60,8 +63,8 @@ private class Parser(private val src: String) {
             pos++
             val a = left
             val b = product()
-            left = if (op == '+') Expr { x, y, c -> a.eval(x, y, c) + b.eval(x, y, c) }
-            else Expr { x, y, c -> a.eval(x, y, c) - b.eval(x, y, c) }
+            left = if (op == '+') Expr { x, y, c, d -> a.eval(x, y, c, d) + b.eval(x, y, c, d) }
+            else Expr { x, y, c, d -> a.eval(x, y, c, d) - b.eval(x, y, c, d) }
         }
     }
 
@@ -75,8 +78,8 @@ private class Parser(private val src: String) {
             pos++
             val a = left
             val b = unary()
-            left = if (isMul) Expr { x, y, c -> a.eval(x, y, c) * b.eval(x, y, c) }
-            else Expr { x, y, c -> a.eval(x, y, c) / b.eval(x, y, c) }
+            left = if (isMul) Expr { x, y, c, d -> a.eval(x, y, c, d) * b.eval(x, y, c, d) }
+            else Expr { x, y, c, d -> a.eval(x, y, c, d) / b.eval(x, y, c, d) }
         }
     }
 
@@ -85,7 +88,7 @@ private class Parser(private val src: String) {
             '-' -> {
                 pos++
                 val a = unary()
-                Expr { x, y, c -> -a.eval(x, y, c) }
+                Expr { x, y, c, d -> -a.eval(x, y, c, d) }
             }
             '+' -> {
                 pos++
@@ -101,7 +104,7 @@ private class Parser(private val src: String) {
         if (src.startsWith("**", pos)) {
             pos += 2
             val exponent = unary() // right-associative, allows 2**-x
-            return Expr { x, y, c -> base.eval(x, y, c).pow(exponent.eval(x, y, c)) }
+            return Expr { x, y, c, d -> base.eval(x, y, c, d).pow(exponent.eval(x, y, c, d)) }
         }
         return base
     }
@@ -127,7 +130,7 @@ private class Parser(private val src: String) {
             }
             val value = src.substring(start, pos).toDoubleOrNull()
                 ?: throw IllegalArgumentException("bad number")
-            return Expr { _, _, _ -> value }
+            return Expr { _, _, _, _ -> value }
         }
         if (ch.isLetter()) {
             val start = pos
@@ -139,14 +142,15 @@ private class Parser(private val src: String) {
                 val arg = sum()
                 require(peek() == ')') { "missing )" }
                 pos++
-                return Expr { x, y, c -> fn(arg.eval(x, y, c)) }
+                return Expr { x, y, c, d -> fn(arg.eval(x, y, c, d)) }
             }
             return when (name) {
-                "x" -> Expr { x, _, _ -> x }
-                "y" -> Expr { _, y, _ -> y }
-                "C" -> Expr { _, _, c -> c }
-                "pi" -> Expr { _, _, _ -> PI }
-                "E" -> Expr { _, _, _ -> kotlin.math.E }
+                "x" -> Expr { x, _, _, _ -> x }
+                "y" -> Expr { _, y, _, _ -> y }
+                "C" -> Expr { _, _, c, _ -> c }
+                "C2" -> Expr { _, _, _, d -> d }
+                "pi" -> Expr { _, _, _, _ -> PI }
+                "E" -> Expr { _, _, _, _ -> kotlin.math.E }
                 else -> throw IllegalArgumentException("unknown name $name")
             }
         }

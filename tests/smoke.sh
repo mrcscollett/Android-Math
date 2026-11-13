@@ -11,9 +11,9 @@ fail=0
 adb install -r "$APK" || exit 1
 adb logcat -c
 
-open() { # name equation x0 y0 tab text-to-wait-for
+open() { # name equation x0 y0 tab text-to-wait-for [extra am arguments]
   adb shell am force-stop $PKG
-  local extras="--es equation '$2' --ei tab $5"
+  local extras="--es equation '$2' --ei tab $5 ${7:-}"
   [ -n "$3" ] && extras="$extras --es x0 '$3' --es y0 '$4'"
   # Single quotes keep the device shell from expanding * and ^.
   adb shell "am start -W -n $PKG/.MainActivity $extras" >/dev/null
@@ -64,5 +64,29 @@ expect graph 'Numerical (RK4)'
 
 open input_error "dy/dx=z" "" "" 0 "Unknown symbol"
 expect input_error 'Unknown symbol'
+
+open bernoulli "dy/dx+y=x*y^2" 0 1 0 'text="Steps"'
+expect bernoulli 'text="Bernoulli substitution"'
+
+# Second order, written with d2y/dx2 so the shell needs no nested quotes.
+open second "d2y/dx2+3*dy/dx+2*y=e^x" 0 1 0 'text="Steps"' "--es mode second --es yp0 0"
+expect second 'text="Undetermined coefficients"'
+expect second 'text="Variation of parameters"'
+expect second 'text="Laplace transform"'
+expect second 'Guess the particular solution'
+
+open second_graph "d2y/dx2+y=0" "" "" 1 'text="Graph"' "--es mode second"
+expect second_graph 'Exact solution'
+expect second_graph '= 1.00'
+
+open numeric "dy/dx=x*y" 0 1 0 'text="Steps"' "--es mode numeric --es h 0.25 --es n 4"
+expect numeric 'text="Approximation"'
+expect numeric 'text="Euler"'
+expect numeric 'All steps'
+expect numeric '1.419434'
+
+open numeric_graph "dy/dx=x*y" 0 1 1 'text="Graph"' "--es mode numeric --es h 0.25 --es n 4"
+expect numeric_graph 'Exact solution'
+expect numeric_graph 'text="Euler"'
 
 exit $fail

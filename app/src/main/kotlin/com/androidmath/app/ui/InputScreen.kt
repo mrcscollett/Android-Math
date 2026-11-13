@@ -41,19 +41,41 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.androidmath.app.Mode
 import com.androidmath.app.SolverViewModel
 
 private val KEYS = listOf(
-    "y'", "x", "y", "^", "(", ")", "*", "/", "+", "-", "=",
+    "y'", "y''", "x", "y", "^", "(", ")", "*", "/", "+", "-", "=",
     "e^(", "sin(", "cos(", "tan(", "ln(", "sqrt(", "pi",
 )
 
-private val EXAMPLES = listOf(
-    Triple("y' = x*y", "0", "1"),
-    Triple("y' + 2y = x", "", ""),
-    Triple("y' = y(1-y)", "0", "1/2"),
-    Triple("x y' + y = x^2", "1", "1"),
-    Triple("y' = x^2 + y^2", "", ""),
+/** An example problem: equation, x0, y0 and (for second order) y'(x0). */
+private data class Example(val equation: String, val x0: String = "", val y0: String = "", val slope: String = "")
+
+private val FIRST_ORDER_EXAMPLES = listOf(
+    Example("y' = x*y", "0", "1"),
+    Example("y' + 2y = x"),
+    Example("y' = y(1-y)", "0", "1/2"),
+    Example("(2x + y) + (x + 2y) y' = 0"),
+    Example("y' + y = x y^2", "0", "1"),
+    Example("y' = (x^2 + y^2)/(x y)", "1", "2"),
+    Example("y' = x^2 + y^2"),
+)
+
+private val SECOND_ORDER_EXAMPLES = listOf(
+    Example("y'' + 3y' + 2y = e^x", "0", "1", "0"),
+    Example("y'' + y = 0"),
+    Example("y'' + 2y' + 5y = 0", "0", "0", "1"),
+    Example("y'' + y = sin(x)", "0", "0", "0"),
+    Example("y'' + y = tan(x)"),
+    Example("x^2 y'' + x y' - y = 0", "1", "2", "0"),
+)
+
+private val NUMERICAL_EXAMPLES = listOf(
+    Example("y' = x*y", "0", "1"),
+    Example("y' = x^2 + y^2", "0", "0"),
+    Example("y' = y - x^2 + 1", "0", "1/2"),
+    Example("y' = sin(x) - y", "0", "1"),
 )
 
 @Composable
@@ -66,7 +88,7 @@ fun InputScreen(model: SolverViewModel) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("First-order equation") },
+                title = { Text(model.mode.title) },
                 navigationIcon = { TextButton(onClick = { model.back() }) { Text("Back") } },
             )
         },
@@ -88,7 +110,9 @@ fun InputScreen(model: SolverViewModel) {
                 onValueChange = model::onEquationChange,
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text("Equation") },
-                placeholder = { Text("y' + 2y = x") },
+                placeholder = {
+                    Text(if (model.mode == Mode.SecondOrder) "y'' + 3y' + 2y = e^x" else "y' + 2y = x")
+                },
                 singleLine = true,
                 textStyle = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Monospace),
                 isError = model.previewError != null || model.inputError != null,
@@ -139,16 +163,43 @@ fun InputScreen(model: SolverViewModel) {
                 }
             }
 
+            val numerical = model.mode == Mode.Numerical
+            val second = model.isSecondOrder
             Text(
-                "Initial condition (optional)",
+                when {
+                    numerical -> "Starting point"
+                    second -> "Initial conditions (optional)"
+                    else -> "Initial condition (optional)"
+                },
                 style = MaterialTheme.typography.labelLarge,
                 modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("y(")
-                NumberField(model.x0, { model.x0 = it }, "x₀")
+                NumberField(model.x0, { model.x0 = it }, "x\u2080")
                 Text(") = ")
-                NumberField(model.y0, { model.y0 = it }, "y₀")
+                NumberField(model.y0, { model.y0 = it }, "y\u2080")
+            }
+            if (second) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(top = 8.dp),
+                ) {
+                    Text("y'(${model.x0.ifBlank { "x\u2080" }}) = ")
+                    NumberField(model.yPrime0, { model.yPrime0 = it }, "y'\u2080")
+                }
+            }
+            if (numerical) {
+                Text(
+                    "Step size and number of steps",
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    NumberField(model.stepSize, { model.stepSize = it }, "h")
+                    Spacer(Modifier.width(12.dp))
+                    NumberField(model.stepCount, { model.stepCount = it }, "steps")
+                }
             }
 
             model.inputError?.let {
@@ -170,7 +221,7 @@ fun InputScreen(model: SolverViewModel) {
                     Spacer(Modifier.width(8.dp))
                     Text(if (model.engineReady) "Solving…" else "Starting the solver…")
                 } else {
-                    Text("Solve step by step")
+                    Text(if (model.mode == Mode.Numerical) "Compute step by step" else "Solve step by step")
                 }
             }
 
@@ -183,21 +234,35 @@ fun InputScreen(model: SolverViewModel) {
                 modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                for ((equation, x0, y0) in EXAMPLES) {
+                val examples = when (model.mode) {
+                    Mode.FirstOrder -> FIRST_ORDER_EXAMPLES
+                    Mode.SecondOrder -> SECOND_ORDER_EXAMPLES
+                    Mode.Numerical -> NUMERICAL_EXAMPLES
+                }
+                for (example in examples) {
                     AssistChip(
                         onClick = {
-                            model.setEquationText(equation)
-                            model.x0 = x0
-                            model.y0 = y0
+                            model.setEquationText(example.equation)
+                            model.x0 = example.x0
+                            model.y0 = example.y0
+                            model.yPrime0 = example.slope
                         },
                         label = {
-                            Text(if (x0.isEmpty()) equation else "$equation,  y($x0) = $y0")
+                            Text(
+                                when {
+                                    example.x0.isEmpty() -> example.equation
+                                    example.slope.isEmpty() ->
+                                        "${example.equation},  y(${example.x0}) = ${example.y0}"
+                                    else -> "${example.equation},  y(${example.x0}) = ${example.y0},  " +
+                                        "y'(${example.x0}) = ${example.slope}"
+                                }
+                            )
                         },
                     )
                 }
             }
             Text(
-                "Write the derivative as y' or dy/dx. Use ^ for powers and * or a space " +
+                "Write derivatives as y' and y'' (or dy/dx). Use ^ for powers and * or a space " +
                     "between a variable and a function, as in x*sin(x).",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

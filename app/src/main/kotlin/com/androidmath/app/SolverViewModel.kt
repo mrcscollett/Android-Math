@@ -17,17 +17,33 @@ import kotlinx.coroutines.launch
 
 enum class Screen { Home, Input, Result }
 
+/** Which section of the app the input screen is serving. */
+enum class Mode(val title: String) {
+    FirstOrder("First-order equation"),
+    SecondOrder("Second-order equation"),
+    Numerical("Numerical methods"),
+}
+
 class SolverViewModel(app: Application) : AndroidViewModel(app) {
     var screen by mutableStateOf(Screen.Home)
+    var mode by mutableStateOf(Mode.FirstOrder)
+        private set
 
     var equation by mutableStateOf(TextFieldValue(""))
         private set
     var x0 by mutableStateOf("")
     var y0 by mutableStateOf("")
+    /** y'(x0), used by second-order problems. */
+    var yPrime0 by mutableStateOf("")
+    var stepSize by mutableStateOf("0.1")
+    var stepCount by mutableStateOf("10")
 
     var previewLatex by mutableStateOf("")
         private set
     var previewError by mutableStateOf<String?>(null)
+        private set
+    /** Order of the equation as the engine reads it (1 or 2). */
+    var previewOrder by mutableStateOf(1)
         private set
     var engineReady by mutableStateOf(false)
         private set
@@ -46,6 +62,7 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
     /** Points the user tapped on the graph: world (x, y) pairs. */
     val tappedPoints = mutableStateListOf<Pair<Double, Double>>()
     var constant by mutableStateOf(1f)
+    var constant2 by mutableStateOf(1f)
     var viewResetKey by mutableStateOf(0)
 
     private var previewJob: Job? = null
@@ -63,6 +80,20 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
             return methods.firstOrNull { it.id == methodId } ?: methods.firstOrNull()
         }
 
+    /** True when the typed equation contains y'' and so needs y'(x0) as well. */
+    val isSecondOrder: Boolean
+        get() = mode != Mode.Numerical && (previewOrder == 2 || equation.text.contains("''"))
+
+    fun open(newMode: Mode) {
+        if (newMode != mode) {
+            mode = newMode
+            equation = TextFieldValue("")
+            x0 = ""; y0 = ""; yPrime0 = ""
+            previewLatex = ""; previewError = null; previewOrder = 1; inputError = null
+        }
+        screen = Screen.Input
+    }
+
     fun onEquationChange(value: TextFieldValue) {
         val textChanged = value.text != equation.text
         equation = value
@@ -74,6 +105,7 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
             val r = Engine.preview(getApplication(), value.text)
             previewLatex = if (r.ok) r.latex else ""
             previewError = if (r.ok) null else r.error
+            if (r.ok) previewOrder = r.order
         }
     }
 
@@ -95,7 +127,15 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
         solving = true
         inputError = null
         viewModelScope.launch {
-            val (json, parsed) = Engine.solve(getApplication(), equation.text, x0, y0)
+            val (json, parsed) = if (mode == Mode.Numerical) {
+                Engine.numeric(getApplication(), equation.text, x0, y0, stepSize, stepCount)
+            } else {
+                // y'(x0) only means something for a second-order equation.
+                val slope = if (equation.text.contains("''") || previewOrder == 2 ||
+                    equation.text.contains("d2y")
+                ) yPrime0 else ""
+                Engine.solve(getApplication(), equation.text, x0, y0, slope)
+            }
             solving = false
             if (!parsed.ok) {
                 inputError = parsed.error
@@ -105,9 +145,10 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
             result = parsed
             methodId = parsed.applicableMethods.firstOrNull()?.id
             // With no symbolic method the graph is the useful part.
-            tab = if (parsed.applicableMethods.isEmpty()) 1 else openTab
+            tab = if (parsed.applicableMethods.isEmpty() && parsed.rhsExpr != null) 1 else openTab
             tappedPoints.clear()
             constant = 1f
+            constant2 = 1f
             viewResetKey++
             screen = Screen.Result
         }

@@ -45,6 +45,7 @@ _UNICODE = {
 
 _ALLOWED_CHARS = re.compile(r"^[0-9A-Za-z+\-*/^().,=\s]*$")
 _PRIME = "D"  # single-letter stand-in for y' while parsing
+_PRIME2 = "W"  # and for y'' (Q, S, N, E, I, O are taken by SymPy)
 
 
 class Problem:
@@ -55,7 +56,11 @@ class Problem:
         self.x = sp.Symbol(indep, real=True)
         self.y = sp.Symbol("y", real=True)
         self.yp = sp.Symbol("y'", real=True)
+        self.ypp = sp.Symbol("y''", real=True)
         self.C = sp.Symbol("C", real=True)
+        self.C1 = sp.Symbol("C_1", real=True)
+        self.C2 = sp.Symbol("C_2", real=True)
+        self.order = 1
 
 
 def _normalise_text(text):
@@ -89,20 +94,20 @@ def _check_identifiers(text, variables):
         if len(word) > 1 and any(word.startswith(v) or word.endswith(v) for v in variables):
             raise InputError(
                 "I couldn't read '%s'. Put a * or a space between variables and "
-                "function names, for example x*sin(x)." % word.replace(_PRIME, "y'")
+                "function names, for example x*sin(x)." % word.replace(_PRIME2, "y''").replace(_PRIME, "y'")
             )
         raise InputError(
             "Unknown symbol '%s'. This problem can use %s, y, y', numbers, pi, e "
             "and functions such as sin, cos, exp, ln, sqrt."
-            % ("".join(unknown) if len(word) == 1 else word.replace(_PRIME, "y'"),
-               (sorted(variables - {"y", _PRIME, "e"}) or ["x"])[0])
+            % ("".join(unknown) if len(word) == 1 else word.replace(_PRIME2, "y''").replace(_PRIME, "y'"),
+               (sorted(variables - {"y", _PRIME, _PRIME2, "e"}) or ["x"])[0])
         )
 
 
 def _parse_side(text, prob, allow_vars=True):
     if not text.strip():
         raise InputError("One side of the equation is empty.")
-    variables = {prob.indep_name, "y", _PRIME, "e"} if allow_vars else {"e"}
+    variables = {prob.indep_name, "y", _PRIME, _PRIME2, "e"} if allow_vars else {"e"}
     _check_identifiers(text, variables)
     if re.search(r"(?<![0-9])\.(?![0-9])", text):
         raise InputError("A decimal point needs a digit next to it.")
@@ -118,6 +123,7 @@ def _parse_side(text, prob, allow_vars=True):
         sp.Symbol(prob.indep_name): prob.x,
         sp.Symbol("y"): prob.y,
         sp.Symbol(_PRIME): prob.yp,
+        sp.Symbol(_PRIME2): prob.ypp,
         sp.Symbol("e"): sp.E,
     }
     expr = expr.xreplace(swaps)
@@ -138,18 +144,18 @@ def parse_equation(text, indep=None):
     prob = Problem(indep)
 
     text = re.sub(r"d\s*\^?\s*2\s*y\s*/\s*d\s*%s\s*\^?\s*2" % indep, "y''", text)
-    if "''" in text:
-        raise InputError("That is a second-order equation (y''). This section "
-                         "handles first-order equations; higher order arrives "
-                         "in the next phase.")
+    if "'''" in text:
+        raise InputError("Third-order and higher equations are not supported yet.")
     text = re.sub(r"dy\s*/\s*d%s" % indep, " y' ", text)
-    text = re.sub(r"y\s*'\s*\(\s*%s\s*\)" % indep, " y' ", text)
+    text = re.sub(r"y\s*('+)\s*\(\s*%s\s*\)" % indep, r" y\1 ", text)
     text = re.sub(r"y\s*\(\s*%s\s*\)" % indep, " y ", text)
-    if _PRIME in text:
-        raise InputError("Unknown symbol 'D'.")
+    for placeholder in (_PRIME, _PRIME2):
+        if placeholder in text:
+            raise InputError("Unknown symbol '%s'." % placeholder)
+    text = re.sub(r"y\s*''", " %s " % _PRIME2, text)
     text = re.sub(r"y\s*'", " %s " % _PRIME, text)
     if "'" in text:
-        raise InputError("Only y can carry a prime (y').")
+        raise InputError("Only y can carry a prime (y' or y'').")
 
     if text.count("=") != 1:
         raise InputError("Write the equation with a single = sign, "
@@ -157,8 +163,9 @@ def parse_equation(text, indep=None):
     left, right = text.split("=")
     lhs = _parse_side(left, prob)
     rhs = _parse_side(right, prob)
-    if not (lhs - rhs).has(prob.yp):
+    if not (lhs - rhs).has(prob.yp, prob.ypp):
         raise InputError("The equation needs a derivative: write y' or dy/d%s." % indep)
+    prob.order = 2 if (lhs - rhs).has(prob.ypp) else 1
     return prob, lhs, rhs
 
 

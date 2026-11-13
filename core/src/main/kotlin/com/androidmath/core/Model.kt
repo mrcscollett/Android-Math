@@ -9,6 +9,9 @@ import kotlinx.serialization.json.Json
 data class SolveResult(
     val ok: Boolean,
     val error: String? = null,
+    /** "symbolic" for step-by-step solutions, "numeric" for the numerical methods. */
+    val kind: String = "symbolic",
+    val order: Int = 1,
     val indep: String = "x",
     @SerialName("input_latex") val inputLatex: String = "",
     @SerialName("normal_latex") val normalLatex: String = "",
@@ -22,7 +25,13 @@ data class SolveResult(
 }
 
 @Serializable
-data class InitialCondition(val x0: Double, val y0: Double, val latex: String = "")
+data class InitialCondition(
+    val x0: Double,
+    val y0: Double,
+    /** y'(x0), present for second-order problems. */
+    val y1: Double? = null,
+    val latex: String = "",
+)
 
 @Serializable
 data class Method(
@@ -41,10 +50,27 @@ data class Method(
 data class PlotExprs(
     @SerialName("general_expr") val generalExpr: String? = null,
     @SerialName("particular_expr") val particularExpr: String? = null,
-)
+    /** Points computed by a numerical method, as [x, y] pairs. */
+    val points: List<List<Double>> = emptyList(),
+) {
+    /** The points flattened to [x0, y0, x1, y1, ...]. */
+    fun pointArray(): DoubleArray {
+        val out = DoubleArray(points.size * 2)
+        for ((i, p) in points.withIndex()) {
+            out[2 * i] = p.getOrElse(0) { Double.NaN }
+            out[2 * i + 1] = p.getOrElse(1) { Double.NaN }
+        }
+        return out
+    }
+}
 
 @Serializable
-data class PreviewResult(val ok: Boolean, val latex: String = "", val error: String? = null)
+data class PreviewResult(
+    val ok: Boolean,
+    val latex: String = "",
+    val error: String? = null,
+    val order: Int = 1,
+)
 
 object EngineJson {
     private val json = Json { ignoreUnknownKeys = true }
