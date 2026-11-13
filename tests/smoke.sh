@@ -41,6 +41,11 @@ open() { # name equation x0 y0 tab text-to-wait-for
   else
     echo "ok   $1 log has no crash"
   fi
+  if ! adb shell dumpsys activity activities | grep -q "ResumedActivity.*$PKG"; then
+    echo "FAIL $1: the app is not in the foreground; related log lines:"
+    grep -iE "androidmath|chromium|render process|has died|Killing|lowmemorykiller|MathWebView|am_crash|Force finishing" "$OUT/$1-logcat.txt" | tail -80
+    fail=1
+  fi
 }
 
 expect() { # name pattern

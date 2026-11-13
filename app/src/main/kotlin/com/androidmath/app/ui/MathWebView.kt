@@ -48,6 +48,15 @@ fun MathWebView(script: String, modifier: Modifier = Modifier) {
                 setBackgroundColor(AndroidColor.TRANSPARENT)
                 overScrollMode = android.view.View.OVER_SCROLL_NEVER
                 webViewClient = object : WebViewClient() {
+                    // Without this, a crashed renderer process takes the whole app down.
+                    override fun onRenderProcessGone(
+                        view: WebView, detail: android.webkit.RenderProcessGoneDetail,
+                    ): Boolean {
+                        android.util.Log.e("MathWebView", "renderer gone, crashed=${detail.didCrash()}")
+                        state.loaded = false
+                        return true
+                    }
+
                     override fun onPageFinished(view: WebView, url: String?) {
                         state.loaded = true
                         state.applied = state.pending
@@ -57,6 +66,7 @@ fun MathWebView(script: String, modifier: Modifier = Modifier) {
                 loadUrl("file:///android_asset/math/steps.html")
             }
         },
+        onRelease = { view -> view.destroy() },
         update = { view ->
             state.pending = full
             if (state.loaded && state.applied != full) {

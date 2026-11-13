@@ -111,20 +111,24 @@ fun InputScreen(model: SolverViewModel) {
 
             OutlinedCard(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
                 Box(Modifier.fillMaxWidth().height(64.dp), contentAlignment = Alignment.Center) {
+                    // The web view stays in place; an error is drawn over it rather
+                    // than swapping the view in and out as the user types.
                     val error = model.previewError
+                    val hint = when {
+                        error != null -> ""
+                        model.engineReady -> "Your equation appears here as you type"
+                        else -> "Starting the solver\u2026"
+                    }
+                    MathWebView(
+                        script = "showPreview(${jsString(if (error == null) model.previewLatex else "")}, ${jsString(hint)});",
+                        modifier = Modifier.fillMaxSize(),
+                    )
                     if (error != null) {
                         Text(
                             error,
                             color = MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.bodySmall,
                             modifier = Modifier.padding(horizontal = 12.dp),
-                        )
-                    } else {
-                        val hint = if (model.engineReady) "Your equation appears here as you type"
-                        else "Starting the solver…"
-                        MathWebView(
-                            script = "showPreview(${jsString(model.previewLatex)}, ${jsString(hint)});",
-                            modifier = Modifier.fillMaxSize(),
                         )
                     }
                 }
