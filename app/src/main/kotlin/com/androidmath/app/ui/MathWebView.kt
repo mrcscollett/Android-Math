@@ -42,6 +42,13 @@ fun MathWebView(script: String, modifier: Modifier = Modifier) {
         modifier = modifier,
         factory = { context ->
             WebView(context).apply {
+                // Without explicit match-parent params the WebView runs in
+                // wrap-content mode, where the page sees a viewport height of 0
+                // and cannot centre anything vertically.
+                layoutParams = android.view.ViewGroup.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                )
                 settings.javaScriptEnabled = true
                 // Only the bundled page is ever shown; nothing is loaded from the network.
                 settings.blockNetworkLoads = true

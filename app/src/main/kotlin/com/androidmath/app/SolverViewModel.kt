@@ -80,9 +80,10 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
             return methods.firstOrNull { it.id == methodId } ?: methods.firstOrNull()
         }
 
-    /** True when the typed equation contains y'' and so needs y'(x0) as well. */
+    /** True when the problem takes y'(x0) as well: the second-order section, or y'' typed elsewhere. */
     val isSecondOrder: Boolean
-        get() = mode != Mode.Numerical && (previewOrder == 2 || equation.text.contains("''"))
+        get() = mode == Mode.SecondOrder ||
+            (mode != Mode.Numerical && (previewOrder == 2 || equation.text.contains("''")))
 
     fun open(newMode: Mode) {
         if (newMode != mode) {
@@ -131,9 +132,7 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
                 Engine.numeric(getApplication(), equation.text, x0, y0, stepSize, stepCount)
             } else {
                 // y'(x0) only means something for a second-order equation.
-                val slope = if (equation.text.contains("''") || previewOrder == 2 ||
-                    equation.text.contains("d2y")
-                ) yPrime0 else ""
+                val slope = if (isSecondOrder || equation.text.contains("d2y")) yPrime0 else ""
                 Engine.solve(getApplication(), equation.text, x0, y0, slope)
             }
             solving = false

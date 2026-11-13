@@ -1,11 +1,12 @@
-@file:OptIn(ExperimentalMaterial3Api::class)
+@file:OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 
 package com.androidmath.app.ui
 
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -125,9 +126,11 @@ fun InputScreen(model: SolverViewModel) {
                 keyboardActions = KeyboardActions(onDone = { submit() }),
             )
 
-            Row(
-                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            // Wraps onto extra lines so every key is visible without scrolling.
+            FlowRow(
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 for (key in KEYS) {
                     FilledTonalButton(
@@ -174,19 +177,11 @@ fun InputScreen(model: SolverViewModel) {
                 style = MaterialTheme.typography.labelLarge,
                 modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
             )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("y(")
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 NumberField(model.x0, { model.x0 = it }, "x\u2080")
-                Text(") = ")
-                NumberField(model.y0, { model.y0 = it }, "y\u2080")
-            }
-            if (second) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(top = 8.dp),
-                ) {
-                    Text("y'(${model.x0.ifBlank { "x\u2080" }}) = ")
-                    NumberField(model.yPrime0, { model.yPrime0 = it }, "y'\u2080")
+                NumberField(model.y0, { model.y0 = it }, "y(x\u2080)")
+                if (second) {
+                    NumberField(model.yPrime0, { model.yPrime0 = it }, "y'(x\u2080)")
                 }
             }
             if (numerical) {
@@ -195,9 +190,8 @@ fun InputScreen(model: SolverViewModel) {
                     style = MaterialTheme.typography.labelLarge,
                     modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
                 )
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     NumberField(model.stepSize, { model.stepSize = it }, "h")
-                    Spacer(Modifier.width(12.dp))
                     NumberField(model.stepCount, { model.stepCount = it }, "steps")
                 }
             }
@@ -230,8 +224,8 @@ fun InputScreen(model: SolverViewModel) {
                 style = MaterialTheme.typography.labelLarge,
                 modifier = Modifier.padding(top = 24.dp),
             )
-            Row(
-                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 val examples = when (model.mode) {
@@ -278,7 +272,7 @@ private fun NumberField(value: String, onChange: (String) -> Unit, label: String
     OutlinedTextField(
         value = value,
         onValueChange = onChange,
-        modifier = Modifier.width(104.dp),
+        modifier = Modifier.width(116.dp),
         label = { Text(label) },
         singleLine = true,
         keyboardOptions = KeyboardOptions(
