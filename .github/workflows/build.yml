@@ -52,7 +52,9 @@ jobs:
         with:
           api-level: 34
           arch: x86_64
-          target: google_apis
+          # Plain AOSP image: on google_apis, Play Services restarts after boot and
+          # the system kills apps bound to its font provider, which fails runs at random.
+          target: default
           disable-animations: true
           script: bash tests/smoke.sh app-debug.apk
       - uses: actions/upload-artifact@v4
