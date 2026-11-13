@@ -220,7 +220,7 @@ class ModelTest {
     @Test fun parsesNumeric() {
         val r = EngineJson.solveResult(fixture("numeric.json"))
         assertEquals("numeric", r.kind)
-        assertEquals(listOf("euler", "heun", "rk4"), r.methods.map { it.id })
+        assertEquals(listOf("euler", "heun", "rk4", "midpoint", "ab4", "rkf45"), r.methods.map { it.id })
         val pts = r.methods[0].plot!!.pointArray()
         assertEquals(10, pts.size)
         assertEquals(0.0, pts[0], 0.0)
