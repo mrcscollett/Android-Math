@@ -11,6 +11,12 @@ What it covers so far:
 - **Second order**: constant coefficients (characteristic equation),
   undetermined coefficients, variation of parameters, homogeneous
   Cauchy-Euler equations and Laplace transforms.
+- **Third and fourth order**: constant coefficients by the characteristic
+  equation and undetermined coefficients.
+- **Also**: reduction of order, variation of parameters for Cauchy-Euler and
+  other variable-coefficient equations, a phase line for autonomous equations,
+  and the integration technique (substitution, parts, partial fractions) shown
+  inside the steps.
 - **Series solutions**: power series at ordinary points and Frobenius series
   at regular singular points.
 - **Laplace transforms**: forward and inverse transforms with the rules shown

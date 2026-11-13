@@ -52,7 +52,7 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var previewError by mutableStateOf<String?>(null)
         private set
-    /** Order of the equation as the engine reads it (1 or 2). */
+    /** Order of the equation as the engine reads it (1 to 4). */
     var previewOrder by mutableStateOf(1)
         private set
     var engineReady by mutableStateOf(false)
@@ -93,7 +93,7 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
     /** True when the problem takes y'(x0) as well: the second-order section, or y'' typed elsewhere. */
     val isSecondOrder: Boolean
         get() = mode == Mode.SecondOrder ||
-            (mode == Mode.FirstOrder && (previewOrder == 2 || equation.text.contains("''")))
+            (mode == Mode.FirstOrder && (previewOrder >= 2 || equation.text.contains("''")))
 
     private val previewKind: String
         get() = when {

@@ -37,9 +37,13 @@ def tex(expr):
 def tex_side(expr, prob):
     """LaTeX for one side of the ODE with the y' term first, then y terms."""
     terms = sp.Add.make_args(expr)
-    if len(terms) < 2 or not expr.has(prob.yp, prob.ypp):
+    if len(terms) < 2 or not expr.has(prob.yp, prob.ypp, prob.y3, prob.y4):
         return tex(expr)
     def rank(term):
+        if term.has(prob.y4):
+            return -2
+        if term.has(prob.y3):
+            return -1
         if term.has(prob.ypp):
             return 0
         return 1 if term.has(prob.yp) else (2 if term.has(prob.y) else 3)
@@ -215,6 +219,11 @@ def hard_to_solve(expr, var):
     top = degree(expr)
     if top is not None:
         return top > 2
+    # The unknown both inside a function (ln, arctan, ...) and outside one gives a
+    # transcendental equation with no elementary solution.
+    wrapped = [fn for fn in expr.atoms(sp.Function) if fn.has(var)]
+    if wrapped and expr.xreplace({fn: sp.Dummy() for fn in wrapped}).has(var):
+        return True
     for fn in expr.atoms(sp.Function):
         for arg in fn.args:
             inner = arg.args[0] if isinstance(arg, sp.Abs) else arg

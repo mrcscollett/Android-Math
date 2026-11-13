@@ -6,6 +6,7 @@ steps, general_latex, particular_latex, plot, verified, verify_note.
 import sympy as sp
 from sympy.solvers.ode import constantsimp
 
+from .integrals import explain
 from .util import (TIMEOUT, check_solution, dydx, hard_to_solve, has_integral, integrate,
                    is_zero, plot_expr, residual_status, run_with_timeout, sample_zero,
                    signed,
@@ -242,8 +243,10 @@ def separable(prob, f, ic):
         "with respect to \\(%s\\). One constant of integration is enough."
         % xn,
         ["%s = %s" % (left_int, right_int), "%s = %s" % (tex(H_show), _plus_c(G_show))],
-        ([] if direct else [step("Left integral", "", ["%s = %s" % (left_int, tex(H_show))])])
-        + [step("Right integral", "", ["%s = %s" % (right_int, tex(G_show))])]))
+        ([] if direct else [step("Left integral", "", ["%s = %s" % (left_int, tex(H_show))])]
+         + explain(inv_h, y, "Left integral"))
+        + [step("Right integral", "", ["%s = %s" % (right_int, tex(G_show))])]
+        + explain(g, x, "Right integral")))
 
     implicit = sp.Eq(H, G + C)
     implicit_tex = "%s = %s" % (tex(H_show), _plus_c(G_show))
@@ -416,7 +419,8 @@ def linear(prob, f, ic):
         "Find the integrating factor",
         "The integrating factor is \\(\\mu = e^{\\int p\\,d%s}\\)." % xn + log_note,
         ["\\mu(%s) = e^{\\int %s\\,d%s} = %s" % (xn, tex(p), xn, tex(mu))],
-        [step("Integral of p", "", ["\\int %s\\,d%s = %s" % (_paren(p), xn, tex(P))])]))
+        [step("Integral of p", "", ["\\int %s\\,d%s = %s" % (_paren(p), xn, tex(P))])]
+        + explain(p, x, "Integral of p")))
 
     muq = sp.simplify(mu * q)
     steps.append(step(
@@ -450,7 +454,8 @@ def linear(prob, f, ic):
             "Integrate with respect to \\(%s\\). The left side undoes the derivative." % xn,
             ["%s\\,y = %s" % (_paren(mu), right_int),
              "%s\\,y = %s" % (_paren(mu), _plus_c(R))],
-            [step("Right integral", "", ["%s = %s" % (right_int, tex(R))])]))
+            [step("Right integral", "", ["%s = %s" % (right_int, tex(R))])]
+            + explain(muq, x, "Right integral")))
 
     general = _tidy((R + C) / mu, C)
     steps.append(step(
@@ -492,6 +497,21 @@ def _tidy(expr, C):
 # Exact equations
 # --------------------------------------------------------------------------
 
+def _is_separable(prob, f):
+    for candidate in (f, sp.factor(f), sp.together(f)):
+        try:
+            if sp.separatevars(candidate, dict=True, symbols=(prob.x, prob.y)):
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def _is_linear(prob, f):
+    a = sp.simplify(sp.diff(f, prob.y))
+    return not a.has(prob.y) and not sp.simplify(f - a * prob.y).has(prob.y) and a != 0
+
+
 def exact(prob, f, ic):
     name = "Exact equation"
     x, y, C = prob.x, prob.y, prob.C
@@ -508,7 +528,7 @@ def exact(prob, f, ic):
         if is_zero(sp.diff(M, y) - sp.diff(N, x)):
             chosen = (M, N, None, None)
             break
-    plain = separable(prob, f, None)["applicable"] or linear(prob, f, None)["applicable"]
+    plain = _is_separable(prob, f) or _is_linear(prob, f)
     if chosen is None and not plain:
         # Look for an integrating factor that depends on one variable only.
         for M, N in candidates:
@@ -955,7 +975,119 @@ def laplace(prob, f, ic):
                    steps, None, sol, prob, f, ic)
 
 
-METHODS = (separable, linear, exact, bernoulli, homogeneous, laplace)
+# --------------------------------------------------------------------------
+# Phase line (qualitative analysis of y' = f(y))
+# --------------------------------------------------------------------------
+
+def phase_line(prob, f, ic):
+    name = "Phase line (qualitative)"
+    x, y, xn = prob.x, prob.y, prob.indep_name
+    if f.has(x) or not f.has(y):
+        return _not_applicable(
+            "phase_line", name,
+            "A phase line needs an autonomous equation \\(y' = f(y)\\); here the "
+            "right-hand side %s." % ("depends on \\(%s\\)" % xn if f.has(x)
+                                    else "does not depend on \\(y\\)"))
+    try:
+        roots = sp.solveset(f, y, domain=sp.S.Reals)
+    except Exception:
+        roots = None
+    if not isinstance(roots, sp.FiniteSet) and roots != sp.S.EmptySet:
+        return _not_applicable("phase_line", name,
+                               "The equilibrium values could not be listed (there may "
+                               "be infinitely many).")
+    points = sorted([r for r in roots if r.is_real and not r.free_symbols], key=lambda v: float(v))
+    if len(points) > 8:
+        return _not_applicable("phase_line", name, "There are too many equilibrium values to tabulate.")
+
+    def sign_at(value):
+        try:
+            v = complex(sp.N(f.subs(y, value)))
+            if v != v or abs(v.imag) > 1e-12:
+                return 0
+            return 1 if v.real > 0 else (-1 if v.real < 0 else 0)
+        except Exception:
+            return 0
+
+    edges = [float(p) for p in points]
+    tests = ([edges[0] - 1] + [(a + b) / 2 for a, b in zip(edges, edges[1:])] + [edges[-1] + 1]) if edges else [0.0]
+    signs = [sign_at(sp.Float(t)) for t in tests]
+    labels = []
+    for i in range(len(tests)):
+        if not points:
+            labels.append("\\text{all } y")
+        elif i == 0:
+            labels.append("y < %s" % tex(points[0]))
+        elif i == len(points):
+            labels.append("y > %s" % tex(points[-1]))
+        else:
+            labels.append("%s < y < %s" % (tex(points[i - 1]), tex(points[i])))
+    word = {1: "increase", -1: "decrease", 0: "undefined"}
+    rows = [[labels[i], {1: "+", -1: "-", 0: "?"}[signs[i]], word[signs[i]]] for i in range(len(tests))]
+
+    kinds = []
+    for i in range(len(points)):
+        below, above = signs[i], signs[i + 1]
+        if below > 0 and above < 0:
+            kinds.append("stable")
+        elif below < 0 and above > 0:
+            kinds.append("unstable")
+        else:
+            kinds.append("semi-stable")
+
+    steps = [step(
+        "Find the equilibrium solutions",
+        "The equation is autonomous: the slope depends only on \\(y\\). Constant "
+        "solutions are the values where \\(f(y) = 0\\).",
+        ["f(y) = %s" % tex(f),
+         ",\\quad ".join(_eq("y", p) for p in points) if points
+         else "\\text{no equilibrium solutions: } f(y) \\text{ is never zero}"])]
+    table = step(
+        "Check the sign of f(y) between them",
+        "Between equilibria the sign of \\(y'\\) cannot change, so one test value per "
+        "interval shows whether solutions there rise or fall.")
+    table["table"] = {"headers": ["\\text{interval}", "\\text{sign of } y'", "\\text{solutions}"],
+                      "rows": rows}
+    steps.append(table)
+    if points:
+        steps.append(step(
+            "Classify each equilibrium",
+            "An equilibrium is stable when solutions on both sides move towards it, "
+            "unstable when they move away, and semi-stable when one side approaches "
+            "and the other leaves.",
+            [",\\qquad ".join("y = %s:\\ \\text{%s}" % (tex(p), k) for p, k in zip(points, kinds))]))
+    if ic:
+        y0 = ic[1]
+        if any(is_zero(p - y0) for p in points):
+            text = ("The initial value \\(y = %s\\) is an equilibrium, so the solution "
+                    "stays there for all \\(%s\\)." % (tex(y0), xn))
+        else:
+            index = sum(1 for e in edges if float(y0) > e)
+            s = signs[index]
+            if s > 0:
+                target = points[index] if index < len(points) else None
+                text = ("Starting at \\(y = %s\\) the solution increases" % tex(y0)) + (
+                    " and approaches \\(y = %s\\) as \\(%s \\to \\infty\\)." % (tex(target), xn)
+                    if target is not None else " without bound.")
+            elif s < 0:
+                target = points[index - 1] if index > 0 else None
+                text = ("Starting at \\(y = %s\\) the solution decreases" % tex(y0)) + (
+                    " and approaches \\(y = %s\\) as \\(%s \\to \\infty\\)." % (tex(target), xn)
+                    if target is not None else " without bound.")
+            else:
+                text = "The equation is not defined at this initial value."
+        final = step("Follow the initial value", text)
+        final["kind"] = "answer"
+        steps.append(final)
+    return {"id": "phase_line", "name": name, "applicable": True, "qualitative": True,
+            "reason": "The right-hand side depends only on \\(y\\), so the long-term "
+                      "behaviour can be read off without solving.",
+            "steps": steps, "general_latex": None, "particular_latex": None,
+            "plot": {"general_expr": None, "particular_expr": None},
+            "verified": None, "verify_note": ""}
+
+
+METHODS = (separable, linear, exact, bernoulli, homogeneous, laplace, phase_line)
 
 _OTHER_TYPES = (
     ("Riccati", "Riccati"),

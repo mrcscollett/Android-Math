@@ -66,7 +66,7 @@ def test_ivp_matches_numerical_solution(text, x0, y0, expected, x1):
     a, b = r["ic"]["x0"], r["ic"]["y0"]
     reference = mpmath.odefun(lambda t, v: f(t, v), a, b)(x1)
     for m in r["methods"]:
-        if not m["applicable"]:
+        if not m["applicable"] or m.get("qualitative"):
             continue
         assert m["verified"] is True, m["verify_note"]
         assert m["particular_latex"]
@@ -97,7 +97,7 @@ def test_general_solution(text, expected):
     assert r["ok"], r.get("error")
     assert {m["id"] for m in r["methods"] if m["applicable"]} & CORE == expected
     for m in r["methods"]:
-        if m["applicable"]:
+        if m["applicable"] and not m.get("qualitative"):
             assert m["verified"] is not False
             assert m["general_latex"]
             assert m["particular_latex"] is None
@@ -130,7 +130,7 @@ def test_neither_method_applies():
 def test_reasons_are_given_for_every_method():
     r = run("y' = x*y")
     assert [m["id"] for m in r["methods"]] == [
-        "separable", "linear", "exact", "bernoulli", "homogeneous", "laplace"]
+        "separable", "linear", "exact", "bernoulli", "homogeneous", "laplace", "phase_line"]
     assert all(m["reason"] for m in r["methods"])
 
 
@@ -158,7 +158,7 @@ def test_independent_variable_t():
 
 @pytest.mark.parametrize("text,fragment", [
     ("", "Enter an equation"),
-    ("y''' + y = 0", "Third-order"),
+    ("y''''' + y = 0", "above fourth order"),
     ("y'' + y^2 = 0", "nonlinearly"),
     ("y' = 3y + z", "Unknown symbol"),
     ("y' = xsin(x)", "couldn't read"),
@@ -209,7 +209,7 @@ MORE_IVPS = [
     ("y' = (x+y)/x", "1", "0", {"linear", "homogeneous"}, 2.0),
     ("y' = y/x + (y/x)^2", "1", "1", {"bernoulli", "homogeneous"}, 1.5),
     ("y' + 2y = e^(-x)", "0", "1", {"linear", "laplace"}, 1.0),
-    ("y' = 3y + 2", "0", "0", {"separable", "linear", "laplace"}, 0.5),
+    ("y' = 3y + 2", "0", "0", {"separable", "linear", "laplace", "phase_line"}, 0.5),
     ("y' + y = y^2 e^x", "0", "1/2", {"bernoulli"}, 0.5),
 ]
 
@@ -225,7 +225,7 @@ def test_more_first_order_methods(text, x0, y0, expected, x1):
     reference = mpmath.odefun(lambda t, v: f(t, v), a, b)(x1)
     explicit = 0
     for m in r["methods"]:
-        if not m["applicable"]:
+        if not m["applicable"] or m.get("qualitative"):
             continue
         assert m["verified"] is not False, (m["id"], m["verify_note"])
         assert m["particular_latex"], m["id"]
@@ -299,7 +299,7 @@ def test_second_order_ivp(text, x0, y0, y1, expected, x1):
     reference = _second_reference(text, x0, y0, y1, x1)
     answers = set()
     for m in r["methods"]:
-        if not m["applicable"]:
+        if not m["applicable"] or m.get("qualitative"):
             continue
         assert m["verified"] is True, (m["id"], m["verify_note"])
         got = plot_fn(m["plot"]["particular_expr"])(x1)
@@ -480,7 +480,7 @@ def test_inverse_transform_matches_quadrature(text):
     F, symbols = parse_expression(text, ["s"])
     answers = []
     for m in r["methods"]:
-        if not m["applicable"]:
+        if not m["applicable"] or m.get("qualitative"):
             continue
         assert m["verified"] is True
         for s_value in (4.0, 6.5):
@@ -616,7 +616,7 @@ def test_frobenius_two_roots():
 def test_frobenius_log_case_and_limits():
     m = method(run("x^2 y'' + x y' + x^2 y = 0"), "series")   # Bessel J0
     assert m["applicable"]
-    assert "About the second solution" in [s["title"] for s in m["steps"]]
+    assert "Find the second solution with a logarithm" in [s["title"] for s in m["steps"]]
     _, first, _ = _series_value(m, 0.5, "general_expr")
     assert abs(first - float(mpmath.besselj(0, 0.5))) < 1e-6
     assert "irregular" in method(run("x^3 y'' + y = 0"), "series")["reason"]
@@ -695,6 +695,160 @@ def test_system_errors_and_preview():
     assert "both x(0) and y(0)" in json.loads(system("x", "y", "1", ""))["error"]
     assert json.loads(preview("x + 2y;3x", "system"))["latex"] == "x' = x + 2 y,\\qquad y' = 3 x"
     assert not json.loads(preview("q;x", "system"))["ok"]
+
+
+# ---- group 1: higher order, integration steps, reduction of order, phase line ----
+
+def _rk4_system(deriv, state, t0, t1, h=0.0005):
+    t = t0
+    for _ in range(int(round((t1 - t0) / h))):
+        k1 = deriv(t, state)
+        k2 = deriv(t + h / 2, [a + h / 2 * b for a, b in zip(state, k1)])
+        k3 = deriv(t + h / 2, [a + h / 2 * b for a, b in zip(state, k2)])
+        k4 = deriv(t + h, [a + h * b for a, b in zip(state, k3)])
+        state = [a + h / 6 * (p + 2 * q + 2 * u + w) for a, p, q, u, w in zip(state, k1, k2, k3, k4)]
+        t += h
+    return state
+
+
+# (equation, x0, y0, "y', y'', ..." list, method id, x to compare at)
+HIGHER = [
+    ("y''' - 6y'' + 11y' - 6y = 0", "0", "1", "0, 0", "characteristic", 0.7),
+    ("y'''' - y = 0", "0", "1", "0, 0, 0", "characteristic", 1.0),
+    ("y'''' + 2y'' + y = 0", "0", "0", "1, 0, 0", "characteristic", 1.2),
+    ("y''' + y' = sin(x)", "0", "0", "0, 1", "undetermined", 1.5),
+    ("y''' - 3y'' + 3y' - y = e^x", "0", "1", "2, 0", "undetermined", 0.8),
+    ("y''' - y' = x", "0", "0", "1, 0", "undetermined", 1.0),
+    ("d3y/dx3 + 8y = 0", "0", "1", "0, 0", "characteristic", 0.9),
+    ("2y''' + y'' = 4", "1", "0", "1, -1", "undetermined", 2.0),
+]
+
+
+@pytest.mark.parametrize("text,x0,y0,rest,method_id,x1", HIGHER)
+def test_higher_order_ivp(text, x0, y0, rest, method_id, x1):
+    r = json.loads(solve(text, x0, y0, rest))
+    assert r["ok"], r.get("error")
+    assert r["order"] in (3, 4)
+    assert [m["id"] for m in r["methods"] if m["applicable"]] == [method_id]
+    m = method(r, method_id)
+    assert m["verified"] is True, m["verify_note"]
+    from deengine.parsing import parse_equation
+    from deengine.higher_order import analyse
+    prob, lhs, rhs = parse_equation(text)
+    eq = analyse(prob, lhs, rhs)
+    g = sp.lambdify(prob.x, eq.g, "math")
+    c = [float(v) for v in eq.c]
+    n = eq.n
+
+    def deriv(t, v):
+        top = (g(t) - sum(c[k] * v[k] for k in range(n))) / c[n]
+        return list(v[1:]) + [top]
+
+    start = [float(sp.sympify(y0))] + [float(sp.sympify(p)) for p in rest.split(",")]
+    reference = _rk4_system(deriv, start, float(x0), x1)[0]
+    got = float(sp.sympify(m["plot"]["particular_expr"], locals={"x": X}).subs(X, x1))
+    assert abs(got - reference) < 1e-6 * (1 + abs(reference)), (got, reference)
+    assert m["plot"]["general_expr"] is None
+
+
+def test_higher_order_general_and_errors():
+    r = run("y''' - 3y'' + 3y' - y = e^x")
+    m = method(r, "undetermined")
+    assert "C_{3}" in m["general_latex"] and "\\frac{x^{3} e^{x}}{6}" in m["general_latex"]
+    assert "multiplied" in next(s for s in m["steps"] if s["title"] == "Guess the particular solution")["text"]
+    assert "Third-order" in r["summary"]
+    assert "above fourth order" in run("y''''' + y = 0")["error"]
+    assert "constant coefficients" in run("y''' + x y = 0")["error"]
+    assert "needs 3 initial values" in json.loads(solve("y''' = 6", "1", "0", "1"))["error"]
+    cubic = run("y''' + y' + 5y = 0")
+    assert cubic["ok"] and not any(m["applicable"] for m in cubic["methods"])
+    assert json.loads(preview("y''' - y = 0"))["order"] == 3
+
+
+def test_integration_technique_is_explained():
+    from deengine.integrals import explain
+    titles = lambda expr: [s["title"] for s in explain(expr, X, "Integral")]
+    assert titles(X * sp.exp(2 * X))[0] == "Integral: integration by parts"
+    assert titles(X * sp.cos(X**2)) == ["Integral: substitution"]
+    assert titles(1 / (X * (X - 1))) == ["Integral: partial fractions"]
+    assert titles(sp.exp(X) * sp.sin(X)) == ["Integral: integration by parts, twice"]
+    assert titles(sp.tan(X))[0] == "Integral: rewrite the integrand"
+    assert titles(sp.Integer(3)) == [] and titles(sp.exp(-X**2)) == []
+    parts = explain(X * sp.exp(2 * X), X, "Integral")[0]
+    assert "u = x,\\qquad dv = e^{2 x}\\,dx" in parts["latex"]
+    r = run("y' + y/x = cos(x)")
+    subs = [s["title"] for st in method(r, "linear")["steps"] for s in st["substeps"]]
+    assert "Right integral: integration by parts" in subs
+    logistic = run("y' = y(1-y)")
+    subs = [s["title"] for st in method(logistic, "separable")["steps"] for s in st["substeps"]]
+    assert "Left integral: partial fractions" in subs
+    vop = run("y'' + y = tan(x)")
+    assert any(s["title"].startswith("Integral for u") for st in method(vop, "variation")["steps"]
+               for s in st["substeps"])
+
+
+@pytest.mark.parametrize("text,y0,y1,expected,x1", [
+    ("x y'' - (x+1) y' + y = 0", "1", "0", {"reduction"}, 2.0),
+    ("x^2 y'' - 2y = x", "1", "0", {"variation"}, 2.0),
+    ("x y'' - (x+1) y' + y = x^2", "0", "1", {"variation"}, 2.0),
+    ("x^2 y'' - 3x y' + 4y = x^2", "1", "2", {"variation"}, 1.8),
+])
+def test_reduction_of_order_and_variable_coefficient_variation(text, y0, y1, expected, x1):
+    r = json.loads(solve(text, "1", y0, y1))
+    assert r["ok"], r.get("error")
+    assert {m["id"] for m in r["methods"] if m["applicable"]} == expected
+    m = next(m for m in r["methods"] if m["applicable"])
+    assert m["verified"] is True, m["verify_note"]
+    reference = _second_reference(text, "1", y0, y1, x1)
+    got = plot_fn(m["plot"]["particular_expr"])(x1)
+    assert abs(got - reference) < 1e-6 * (1 + abs(reference)), (got, reference)
+
+
+def test_reduction_steps_and_limits():
+    m = method(run("x y'' - (x+1) y' + y = 0"), "reduction")
+    assert [s["title"] for s in m["steps"]][:2] == ["Find one solution by inspection", "Reduce the order"]
+    assert m["plot"]["general_expr"] == "C*exp(x) + C2*(x + 1)"
+    assert method(run("y'' + y = 0"), "reduction")["applicable"] is False
+    assert "none of the simple" in method(run("y'' - x y = 0"), "reduction")["reason"]
+    euler = run("x^2 y'' - 2y = x")
+    assert "variation of parameters" in method(euler, "cauchy_euler")["reason"]
+
+
+def test_frobenius_logarithmic_second_solution():
+    m = method(run("x^2 y'' + x y' + x^2 y = 0"), "series")   # Bessel order 0
+    assert m["verified"] is True
+    assert "Find the second solution with a logarithm" in [s["title"] for s in m["steps"]]
+    C2 = sp.Symbol("C2")
+    expr = sp.sympify(m["plot"]["general_expr"], locals={"x": X, "C": C, "C2": C2})
+    for xv in (0.3, 0.6):
+        j0, y0 = float(mpmath.besselj(0, xv)), float(mpmath.bessely(0, xv))
+        assert abs(float(expr.subs({X: xv, C: 1, C2: 0})) - j0) < 1e-6
+        # J0 ln x + series equals (pi/2) Y0 + (ln 2 - gamma) J0.
+        want = math.pi / 2 * y0 + (math.log(2) - float(mpmath.euler)) * j0
+        assert abs(float(expr.subs({X: xv, C: 0, C2: 1})) - want) < 1e-5
+    integer_gap = method(run("x y'' + y = 0"), "series")
+    line = next(s for s in integer_gap["steps"] if "logarithm" in s["title"])["latex"][0]
+    assert line.startswith("y_2 = - y_1 \\ln x + 1 - \\frac{3 x^{2}}{4}")
+    assert integer_gap["verified"] is True
+
+
+def test_phase_line():
+    r = run("y' = y(1-y)", "0", "1/2")
+    m = method(r, "phase_line")
+    assert m["applicable"] and m["verified"] is None and m["particular_latex"] is None
+    table = next(s for s in m["steps"] if "table" in s)["table"]
+    assert [row[1] for row in table["rows"]] == ["-", "+", "-"]
+    text = " ".join(l for s in m["steps"] for l in s["latex"])
+    assert "y = 0:\\ \\text{unstable},\\qquad y = 1:\\ \\text{stable}" in text
+    assert "approaches \\(y = 1\\)" in m["steps"][-1]["text"]
+    assert [s["title"] for s in m["steps"]][-1] == "Follow the initial value"   # no Check step
+    semi = method(run("y' = y^2 (y - 2)"), "phase_line")
+    assert "y = 0:\\ \\text{semi-stable},\\qquad y = 2:\\ \\text{unstable}" in " ".join(
+        l for s in semi["steps"] for l in s["latex"])
+    assert "without bound" in method(run("y' = 1 + y^2", "0", "0"), "phase_line")["steps"][-1]["text"]
+    assert method(run("y' = x y"), "phase_line")["applicable"] is False
+    assert method(run("y' = sin(y)"), "phase_line")["applicable"] is False
+    assert "stays there" in method(run("y' = y(1-y)", "0", "1"), "phase_line")["steps"][-1]["text"]
 
 
 def test_export_fixtures():

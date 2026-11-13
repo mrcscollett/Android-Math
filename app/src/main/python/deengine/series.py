@@ -229,27 +229,92 @@ def _frobenius(eq, ic, P, Q, R):
     if y1 is None:
         return _not_applicable("series", NAME, "The coefficients could not be determined.")
     y2 = branch(r2, "y_2") if r2 != r1 else None
+    if y2 is None:
+        y2 = _log_solution(eq, P, Q, R, r1, r2, start, y1, steps)
     if y2 is not None:
         general = prob.C1 * y1 + prob.C2 * y2
         general_tex = "y = C_1 y_1 + C_2 y_2"
         steps.append(step("Write the general solution",
                           "The two series are independent. Valid for \\(%s > 0\\)." % xn,
                           [general_tex]))
-        ok = _residual_ok(eq, y1, r1, start + TERMS) and _residual_ok(eq, y2, r2, start + TERMS)
+        ok = _residual_ok(eq, y1, r1, start + TERMS) and (
+            _small_residual(eq, y2) if y2.has(sp.log) else _residual_ok(eq, y2, r2, start + TERMS))
         general_tex = "y = C_1\\left(%s\\right) + C_2\\left(%s\\right)" % (_asc(y1, x), _asc(y2, x))
     else:
         general = prob.C1 * y1
         general_tex = "y_1 = %s" % _asc(y1, x)
         steps.append(step(
             "About the second solution",
-            "The roots are equal or differ by an integer in a way that makes the "
-            "second solution contain \\(y_1 \\ln %s\\). That logarithmic solution "
-            "is not computed here, so only \\(y_1\\) is given." % xn))
+            "The second solution contains \\(y_1 \\ln %s\\), and its coefficients "
+            "could not be determined here, so only \\(y_1\\) is given." % xn))
         ok = _residual_ok(eq, y1, r1, start + TERMS)
     return _package(eq, steps,
                     "The coefficients are polynomials and \\(%s = 0\\) is a regular "
                     "singular point (method of Frobenius)." % xn,
                     general, None, general_tex, None, ok)
+
+
+def _small_residual(eq, sol):
+    """Does a truncated solution containing ln x nearly satisfy the equation near 0?"""
+    try:
+        res = eq.residual(sol)
+        scale = sum(abs(complex(sp.N(sol.subs(eq.x, v)))) for v in (0.05, 0.1)) + 1
+        return all(abs(complex(sp.N(res.subs(eq.x, v)))) < 1e-5 * scale for v in (0.05, 0.1))
+    except Exception:
+        return None
+
+
+def _log_solution(eq, P, Q, R, r1, r2, start, y1, steps):
+    """Second Frobenius solution y2 = c y1 ln x + x^r2 (b0 + b1 x + ...), or None."""
+    x, xn = eq.x, eq.xn
+    shift = r1 - r2
+    if not (shift.is_Integer and shift >= 0):
+        return None
+    shift = int(shift)
+    # Applying the equation to y1 ln x leaves these terms (the ln x part cancels).
+    extra = sp.expand(sp.powsimp(sp.expand(
+        (eq.a * (2 * sp.diff(y1, x) / x - y1 / x**2) + eq.b * y1 / x) * x**(2 - r2))))
+    c = sp.Integer(1) if shift == 0 else None
+    b = {0: sp.Integer(0) if shift == 0 else sp.Integer(1)}
+    for k in range(1, TERMS + 1):
+        m = start + k
+        rest = sp.simplify(sum(b[n] * _bracket(P, Q, R, m, n, r2) for n in b))
+        lead = sp.simplify(_bracket(P, Q, R, m, k, r2))
+        e = extra.coeff(x, m)
+        if lead == 0:
+            # This is the power where the plain series breaks down: it fixes c instead.
+            if c is not None or e == 0:
+                return None
+            c = sp.simplify(-rest / e)
+            b[k] = sp.Integer(0)
+        else:
+            if c is None:
+                b[k] = sp.simplify(-rest / lead)   # before the critical power, no ln x term yet
+            else:
+                b[k] = sp.simplify(-(rest + c * e) / lead)
+    if c is None:
+        return None
+    tail = _series(b, r2, x)
+    y2 = c * y1 * sp.log(x) + tail
+    if c == 1:
+        lead_tex = "y_1 \\ln %s" % xn
+    elif c == -1:
+        lead_tex = "- y_1 \\ln %s" % xn
+    elif c.could_extract_minus_sign():
+        lead_tex = "- %s\\,y_1 \\ln %s" % (tex(-c), xn)
+    else:
+        lead_tex = "%s\\,y_1 \\ln %s" % (tex(c), xn)
+    series_tex = _asc(tail, x) if tail != 0 else ""
+    joined = lead_tex if not series_tex else (
+        "%s %s" % (lead_tex, series_tex) if series_tex.startswith("- ") else "%s + %s" % (lead_tex, series_tex))
+    steps.append(step(
+        "Find the second solution with a logarithm",
+        ("The roots are equal" if shift == 0 else "The roots differ by the integer %d" % shift)
+        + ", so a second plain series does not exist. The second solution has the form "
+          "\\(y_2 = c\\,y_1 \\ln %s + %s^{r_2}\\sum b_n %s^n\\); substituting and "
+          "matching powers gives \\(c\\) and the \\(b_n\\)." % (xn, xn, xn),
+        ["y_2 = %s" % joined]))
+    return y2
 
 
 def _package(eq, steps, reason, general, particular, general_tex, particular_tex, ok):

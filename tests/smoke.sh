@@ -119,4 +119,9 @@ open system_graph "x*(1-y)" "" "" 1 'text="Graph"' "--es mode system --es equati
 expect system_graph 'Tap the phase plane'
 expect system_graph 'Equilibria'
 
+# Third order, written with d3y/dx3; the derivative values go in one comma-separated extra.
+open third "d3y/dx3-6*d2y/dx2+11*dy/dx-6*y=0" 0 1 0 'text="Steps"' "--es mode second --es yp0 '0,0'"
+expect third 'text="Characteristic equation"'
+expect third 'Solve for the roots'
+
 exit $fail

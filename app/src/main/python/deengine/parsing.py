@@ -48,6 +48,10 @@ _UNICODE = {
 _ALLOWED_CHARS = re.compile(r"^[0-9A-Za-z+\-*/^().,=\s]*$")
 _PRIME = "D"  # single-letter stand-in for y' while parsing
 _PRIME2 = "W"  # and for y'' (Q, S, N, E, I, O are taken by SymPy)
+_PRIME3 = "J"  # y'''
+_PRIME4 = "K"  # y''''
+_PLACEHOLDERS = (_PRIME, _PRIME2, _PRIME3, _PRIME4)
+MAX_ORDER = 4
 
 
 class Problem:
@@ -59,6 +63,10 @@ class Problem:
         self.y = sp.Symbol("y", real=True)
         self.yp = sp.Symbol("y'", real=True)
         self.ypp = sp.Symbol("y''", real=True)
+        self.y3 = sp.Symbol("y'''", real=True)
+        self.y4 = sp.Symbol("y''''", real=True)
+        self.C3 = sp.Symbol("C_3", real=True)
+        self.C4 = sp.Symbol("C_4", real=True)
         self.C = sp.Symbol("C", real=True)
         self.C1 = sp.Symbol("C_1", real=True)
         self.C2 = sp.Symbol("C_2", real=True)
@@ -85,6 +93,12 @@ def detect_indep(text):
     return "x"
 
 
+def _readable(word):
+    for placeholder, primes in zip(reversed(_PLACEHOLDERS), ("''''", "'''", "''", "'")):
+        word = word.replace(placeholder, "y" + primes)
+    return word
+
+
 def _check_identifiers(text, variables):
     for match in re.finditer(r"[A-Za-z_]+", text):
         word = match.group(0)
@@ -96,13 +110,13 @@ def _check_identifiers(text, variables):
         if len(word) > 1 and any(word.startswith(v) or word.endswith(v) for v in variables):
             raise InputError(
                 "I couldn't read '%s'. Put a * or a space between variables and "
-                "function names, for example x*sin(x)." % word.replace(_PRIME2, "y''").replace(_PRIME, "y'")
+                "function names, for example x*sin(x)." % _readable(word)
             )
         raise InputError(
             "Unknown symbol '%s'. This problem can use %s, y, y', numbers, pi, e "
             "and functions such as sin, cos, exp, ln, sqrt."
-            % ("".join(unknown) if len(word) == 1 else word.replace(_PRIME2, "y''").replace(_PRIME, "y'"),
-               (sorted(variables - {"y", _PRIME, _PRIME2, "e"}) or ["x"])[0])
+            % ("".join(unknown) if len(word) == 1 else _readable(word),
+               (sorted(variables - {"y", "e"} - set(_PLACEHOLDERS)) or ["x"])[0])
         )
 
 
@@ -110,7 +124,7 @@ def _parse_side(text, prob, allow_vars=True, variables=None):
     if not text.strip():
         raise InputError("One side of the equation is empty.")
     if variables is None:
-        variables = {prob.indep_name, "y", _PRIME, _PRIME2, "e"} if allow_vars else {"e"}
+        variables = ({prob.indep_name, "y", "e"} | set(_PLACEHOLDERS)) if allow_vars else {"e"}
     _check_identifiers(text, variables)
     if re.search(r"(?<![0-9])\.(?![0-9])", text):
         raise InputError("A decimal point needs a digit next to it.")
@@ -127,6 +141,8 @@ def _parse_side(text, prob, allow_vars=True, variables=None):
         sp.Symbol("y"): prob.y,
         sp.Symbol(_PRIME): prob.yp,
         sp.Symbol(_PRIME2): prob.ypp,
+        sp.Symbol(_PRIME3): prob.y3,
+        sp.Symbol(_PRIME4): prob.y4,
         sp.Symbol("e"): sp.E,
     }
     expr = expr.xreplace(swaps)
@@ -146,19 +162,21 @@ def parse_equation(text, indep=None):
     indep = indep or detect_indep(text)
     prob = Problem(indep)
 
-    text = re.sub(r"d\s*\^?\s*2\s*y\s*/\s*d\s*%s\s*\^?\s*2" % indep, "y''", text)
-    if "'''" in text:
-        raise InputError("Third-order and higher equations are not supported yet.")
+    for n in (4, 3, 2):
+        text = re.sub(r"d\s*\^?\s*%d\s*y\s*/\s*d\s*%s\s*\^?\s*%d" % (n, indep, n),
+                      "y" + "'" * n, text)
+    if "'" * (MAX_ORDER + 1) in text:
+        raise InputError("Equations above fourth order are not supported.")
     text = re.sub(r"dy\s*/\s*d%s" % indep, " y' ", text)
     text = re.sub(r"y\s*('+)\s*\(\s*%s\s*\)" % indep, r" y\1 ", text)
     text = re.sub(r"y\s*\(\s*%s\s*\)" % indep, " y ", text)
-    for placeholder in (_PRIME, _PRIME2):
+    for placeholder in _PLACEHOLDERS:
         if placeholder in text:
             raise InputError("Unknown symbol '%s'." % placeholder)
-    text = re.sub(r"y\s*''", " %s " % _PRIME2, text)
-    text = re.sub(r"y\s*'", " %s " % _PRIME, text)
+    for n in (4, 3, 2, 1):
+        text = re.sub(r"y\s*" + "'" * n, " %s " % _PLACEHOLDERS[n - 1], text)
     if "'" in text:
-        raise InputError("Only y can carry a prime (y' or y'').")
+        raise InputError("Only y can carry primes (y', y'', ...).")
 
     if text.count("=") != 1:
         raise InputError("Write the equation with a single = sign, "
@@ -166,9 +184,11 @@ def parse_equation(text, indep=None):
     left, right = text.split("=")
     lhs = _parse_side(left, prob)
     rhs = _parse_side(right, prob)
-    if not (lhs - rhs).has(prob.yp, prob.ypp):
+    diff = lhs - rhs
+    derivs = (prob.yp, prob.ypp, prob.y3, prob.y4)
+    if not diff.has(*derivs):
         raise InputError("The equation needs a derivative: write y' or dy/d%s." % indep)
-    prob.order = 2 if (lhs - rhs).has(prob.ypp) else 1
+    prob.order = max(n + 1 for n, d in enumerate(derivs) if diff.has(d))
     return prob, lhs, rhs
 
 

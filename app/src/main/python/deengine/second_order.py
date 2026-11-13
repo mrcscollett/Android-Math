@@ -9,6 +9,7 @@ import sympy as sp
 from sympy.solvers.ode.nonhomogeneous import _undetermined_coefficients_match
 
 from .first_order import _eq, _not_applicable, _paren, step
+from .integrals import explain
 from .parsing import InputError
 from .util import (has_integral, integrate, is_zero, plot_expr,
                    residual_status, tex, with_abs)
@@ -351,11 +352,6 @@ def undetermined(eq, ic):
 def variation(eq, ic):
     name = "Variation of parameters"
     x = eq.x
-    if not eq.constant:
-        return _not_applicable("variation", name,
-                               "It needs two known solutions of the homogeneous "
-                               "equation; those are found here only for "
-                               "constant coefficients.")
     if eq.g.has(sp.Heaviside, sp.DiracDelta):
         return _not_applicable("variation", name,
                                "Step and impulse forcing is handled here by "
@@ -364,7 +360,13 @@ def variation(eq, ic):
         return _not_applicable("variation", name,
                                "The right-hand side is 0, so no particular "
                                "solution is needed.")
-    steps, y1, y2, _ = _characteristic(eq)
+    found = _basis(eq)
+    if found is None:
+        return _not_applicable("variation", name,
+                               "It needs two known solutions of the homogeneous "
+                               "equation, and none were found for these variable "
+                               "coefficients.")
+    steps, y1, y2 = found
     yh = _homogeneous_solution(eq, y1, y2)
     steps.append(step(
         "Homogeneous solution",
@@ -406,7 +408,8 @@ def variation(eq, ic):
         "Integrate",
         "Integrate each one. No constants are needed here; they are already "
         "in the homogeneous solution.",
-        ["u_1 = %s" % tex(u1), "u_2 = %s" % tex(u2)]))
+        ["u_1 = %s" % tex(u1), "u_2 = %s" % tex(u2)],
+        explain(du1, x, "Integral for u1") + explain(du2, x, "Integral for u2")))
     yp = sp.simplify(u1 * y1 + u2 * y2)
     # Drop any part of y_p that merely repeats the homogeneous solution.
     yp = _strip_homogeneous(sp.expand(yp), y1, y2, x)
@@ -443,22 +446,24 @@ def _strip_homogeneous(yp, y1, y2, x):
 # Cauchy-Euler (homogeneous)
 # --------------------------------------------------------------------------
 
-def cauchy_euler(eq, ic):
-    name = "Cauchy–Euler (y = x^r)"
+def _euler_form(eq):
+    """(A, B, C) when the left side is A x^2 y'' + B x y' + C y, else None."""
     x = eq.x
-    xn = eq.xn
     A = sp.simplify(eq.a / x**2)
     B = sp.simplify(eq.b / x)
     C = eq.c
     if eq.constant or A.has(x) or B.has(x) or C.has(x) or A == 0:
-        return _not_applicable(
-            "cauchy_euler", name,
-            "The equation does not have the form "
-            "\\(a%s^2 y'' + b%s y' + c y = 0\\)." % (xn, xn))
-    if eq.g != 0:
-        return _not_applicable("cauchy_euler", name,
-                               "Only the homogeneous case (right-hand side 0) "
-                               "is supported so far.")
+        return None
+    return A, B, C
+
+
+def _euler_basis(eq):
+    """Steps and the two solutions x^r of a Cauchy-Euler equation, or None."""
+    form = _euler_form(eq)
+    if form is None:
+        return None
+    A, B, C = form
+    x, xn = eq.x, eq.xn
     r = sp.Symbol("r")
     indicial = sp.expand(A * r * (r - 1) + B * r + C)
     disc = sp.simplify((B - A)**2 - 4 * A * C)
@@ -490,6 +495,84 @@ def cauchy_euler(eq, ic):
                 "\\(%s^{\\alpha}\\sin(\\beta \\ln %s)\\)." % ((xn,) * 4))
         root_tex = "r = %s \\pm %s\\,i" % (tex(alpha), tex(beta))
     steps.append(step("Solve for the roots", kind, [root_tex]))
+    return steps, y1, y2
+
+
+def _inspect(eq):
+    """A simple solution of the homogeneous equation found by trying x^m and e^(mx)."""
+    x = eq.x
+    candidates = [x, x**2, x**3, 1 / x, x**-2] + [sp.exp(m * x) for m in (1, -1, 2, -2)]
+    for cand in candidates:
+        try:
+            if sp.simplify(eq.residual(cand) + eq.g) == 0:
+                return cand
+        except Exception:
+            continue
+    return None
+
+
+def _reduction_basis(eq):
+    """Steps and (y1, y2) from one solution found by inspection plus reduction of order."""
+    x, xn = eq.x, eq.xn
+    y1 = _inspect(eq)
+    if y1 is None:
+        return None
+    p = sp.simplify(eq.b / eq.a)
+    inner = integrate(p, x)
+    if has_integral(inner):
+        return None
+    weight = sp.simplify(sp.exp(-inner) / y1**2)
+    v = integrate(weight, x)
+    if has_integral(v):
+        return None
+    y2 = sp.simplify(y1 * with_abs(v))
+    # Drop any multiple of y1 and any overall constant: they change nothing.
+    y2 = sp.Add(*[t for t in sp.Add.make_args(sp.expand(y2))
+                  if sp.simplify(t / y1).has(x)]) if sp.expand(y2).is_Add else y2
+    coef = y2.as_independent(x)[0]
+    if coef != 0 and coef.is_number:
+        y2 = sp.simplify(y2 / coef)
+    if y2 == 0 or residual_status(eq.residual(y2) + eq.g) not in ("symbolic", "numeric"):
+        return None
+    steps = [
+        step("Find one solution by inspection",
+             "Trying simple functions such as powers of \\(%s\\) and exponentials shows "
+             "that this one satisfies the homogeneous equation." % xn,
+             ["y_1 = %s" % tex(y1)]),
+        step("Reduce the order",
+             "Look for a second solution \\(y_2 = v\\,y_1\\). Substituting leaves a "
+             "first-order equation for \\(v'\\), whose solution is the formula below, "
+             "with \\(p = b/a = %s\\)." % tex(p),
+             ["y_2 = y_1\\int \\frac{e^{-\\int p\\,d%s}}{y_1^{2}}\\,d%s" % (xn, xn),
+              "\\frac{e^{-\\int p\\,d%s}}{y_1^{2}} = %s" % (xn, tex(weight)),
+              "y_2 = %s" % tex(y2)],
+             explain(weight, x, "Integral")),
+    ]
+    return steps, y1, y2
+
+
+def _basis(eq):
+    """(steps, y1, y2) for the homogeneous equation, by whichever route works."""
+    if eq.constant:
+        steps, y1, y2, _ = _characteristic(eq)
+        return steps, y1, y2
+    return _euler_basis(eq) or _reduction_basis(eq)
+
+
+def cauchy_euler(eq, ic):
+    name = "Cauchy\u2013Euler (y = x^r)"
+    xn = eq.xn
+    if _euler_form(eq) is None:
+        return _not_applicable(
+            "cauchy_euler", name,
+            "The equation does not have the form "
+            "\\(a%s^2 y'' + b%s y' + c y = 0\\)." % (xn, xn))
+    if eq.g != 0:
+        return _not_applicable("cauchy_euler", name,
+                               "On its own this solves the homogeneous equation. With a "
+                               "right-hand side, variation of parameters builds on its "
+                               "two solutions.")
+    steps, y1, y2 = _euler_basis(eq)
     general = eq.prob.C1 * y1 + eq.prob.C2 * y2
     steps.append(step(
         "Write the general solution",
@@ -500,6 +583,32 @@ def cauchy_euler(eq, ic):
                     steps, eq, general, particular, ic)
 
 
+
+
+def reduction(eq, ic):
+    name = "Reduction of order"
+    if eq.constant or _euler_form(eq) is not None:
+        return _not_applicable("reduction", name,
+                               "The characteristic-equation methods already give both "
+                               "solutions here.")
+    if eq.g != 0:
+        return _not_applicable("reduction", name,
+                               "On its own this solves the homogeneous equation; with a "
+                               "right-hand side, variation of parameters builds on it.")
+    found = _reduction_basis(eq)
+    if found is None:
+        return _not_applicable("reduction", name,
+                               "It needs one known solution, and none of the simple "
+                               "trial functions (powers of \\(%s\\), exponentials) "
+                               "solves this equation." % eq.xn)
+    steps, y1, y2 = found
+    general = eq.prob.C1 * y1 + eq.prob.C2 * y2
+    steps.append(step("Write the general solution",
+                      "Combine the two independent solutions.", [_eq("y", general)]))
+    particular = _apply_ic(eq, general, ic, steps) if ic else None
+    return _package("reduction", name,
+                    "One solution can be found by inspection, which is enough to "
+                    "produce the second.", steps, eq, general, particular, ic)
 
 
 def laplace(eq, ic):
@@ -535,4 +644,4 @@ def power_series(eq, ic):
     return series.solve(eq, ic)
 
 
-METHODS = (characteristic, undetermined, variation, cauchy_euler, laplace, power_series)
+METHODS = (characteristic, undetermined, variation, cauchy_euler, reduction, laplace, power_series)

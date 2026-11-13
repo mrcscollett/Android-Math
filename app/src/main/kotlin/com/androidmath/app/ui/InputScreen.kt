@@ -43,12 +43,13 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.androidmath.app.Mode
 import com.androidmath.app.SolverViewModel
 
 private val KEYS = listOf(
-    "y'", "y''", "x", "y", "^", "(", ")", "*", "/", "+", "-", "=",
+    "y'", "y''", "y'''", "x", "y", "^", "(", ")", "*", "/", "+", "-", "=",
     "e^(", "sin(", "cos(", "tan(", "ln(", "sqrt(", "pi",
 )
 
@@ -109,6 +110,7 @@ private val SECOND_ORDER_EXAMPLES = listOf(
     Example("y'' + y = tan(x)"),
     Example("x^2 y'' + x y' - y = 0", "1", "2", "0"),
     Example("y'' + y = u(t-2)", "0", "0", "0"),
+    Example("y''' - 6y'' + 11y' - 6y = 0", "0", "1", "0, 0"),
 )
 
 private val NUMERICAL_EXAMPLES = listOf(
@@ -285,7 +287,15 @@ fun InputScreen(model: SolverViewModel) {
                     NumberField(model.x0, { model.x0 = it }, if (system) "x(0)" else "x\u2080")
                     NumberField(model.y0, { model.y0 = it }, if (system) "y(0)" else "y(x\u2080)")
                     if (second) {
-                        NumberField(model.yPrime0, { model.yPrime0 = it }, "y'(x\u2080)")
+                        // Third and fourth order take the remaining values as a comma-separated list.
+                        if (model.previewOrder >= 3) {
+                            NumberField(
+                                model.yPrime0, { model.yPrime0 = it },
+                                "y', y'', \u2026 at x\u2080", width = 200.dp,
+                            )
+                        } else {
+                            NumberField(model.yPrime0, { model.yPrime0 = it }, "y'(x\u2080)")
+                        }
                     }
                 }
                 if (numerical) {
@@ -363,6 +373,9 @@ fun InputScreen(model: SolverViewModel) {
                                     system -> "x' = ${example.equation},  y' = ${example.second},  " +
                                         "x(0) = ${example.x0},  y(0) = ${example.y0}"
                                     example.x0.isEmpty() -> example.equation
+                                    example.slope.contains(",") ->
+                                        "${example.equation},  y(${example.x0}) = ${example.y0},  " +
+                                            "y', y'' = ${example.slope}"
                                     example.slope.isEmpty() ->
                                         "${example.equation},  y(${example.x0}) = ${example.y0}"
                                     else -> "${example.equation},  y(${example.x0}) = ${example.y0},  " +
@@ -395,11 +408,11 @@ fun InputScreen(model: SolverViewModel) {
 }
 
 @Composable
-private fun NumberField(value: String, onChange: (String) -> Unit, label: String) {
+private fun NumberField(value: String, onChange: (String) -> Unit, label: String, width: Dp = 116.dp) {
     OutlinedTextField(
         value = value,
         onValueChange = onChange,
-        modifier = Modifier.width(116.dp),
+        modifier = Modifier.width(width),
         label = { Text(label) },
         singleLine = true,
         keyboardOptions = KeyboardOptions(

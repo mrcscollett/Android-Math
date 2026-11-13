@@ -3,7 +3,8 @@ import json
 
 import sympy as sp
 
-from . import first_order, numeric as numeric_methods, second_order, systems, transforms
+from . import (first_order, higher_order, numeric as numeric_methods, second_order,
+               systems, transforms)
 from .parsing import InputError, parse_equation, parse_number
 from .util import dydx, plot_expr, tex, tex_side
 
@@ -138,6 +139,8 @@ def _solve(text, x0_text, y0_text, y1_text):
     prob, lhs, rhs = parse_equation(text)
     if prob.order == 2:
         return _solve_second(prob, lhs, rhs, x0_text, y0_text, y1_text)
+    if prob.order > 2:
+        return _solve_higher(prob, lhs, rhs, x0_text, y0_text, y1_text)
     xn = prob.indep_name
 
     ic = None
@@ -172,7 +175,7 @@ def _solve(text, x0_text, y0_text, y1_text):
             [input_latex, normal_latex])
     for m in methods:
         # Exact works from the form as written, so it needs no rearranging step.
-        if m["applicable"] and prelude and m["id"] != "exact":
+        if m["applicable"] and prelude and m["id"] not in ("exact", "phase_line"):
             m["steps"].insert(0, prelude)
         if m["applicable"]:
             _add_closing_steps(m, ic)
@@ -257,6 +260,52 @@ def _solve_second(prob, lhs, rhs, x0_text, y0_text, y1_text):
     }
 
 
+def _solve_higher(prob, lhs, rhs, x0_text, y0_text, rest_text):
+    """Order 3 or 4. rest_text lists y'(x0), y''(x0), ... separated by commas."""
+    xn, n = prob.indep_name, prob.order
+    names = ["y", "y'", "y''", "y'''"][:n]
+    ic = None
+    if x0_text.strip() or y0_text.strip() or rest_text.strip():
+        rest = [part.strip() for part in rest_text.split(",") if part.strip()]
+        if not (x0_text.strip() and y0_text.strip()) or len(rest) != n - 1:
+            raise InputError(
+                "An equation of order %d needs %d initial values at %s\u2080: y, then "
+                "%s separated by commas in the last box (or leave every box empty)."
+                % (n, n, xn, ", ".join(names[1:])))
+        x0 = parse_number(x0_text, "%s\u2080" % xn)
+        values = [parse_number(y0_text, "y(%s\u2080)" % xn)] + [
+            parse_number(part, "%s(%s\u2080)" % (name, xn)) for part, name in zip(rest, names[1:])]
+        ic = (x0, values)
+    eq = higher_order.analyse(prob, lhs, rhs)
+    input_latex = "%s = %s" % (tex_side(lhs, prob), tex_side(rhs, prob))
+    methods = _run_methods(higher_order.METHODS, eq, ic)
+    for m in methods:
+        if m["applicable"]:
+            _add_closing_steps(m, ic)
+    applicable = [m for m in methods if m["applicable"]]
+    ordinal = "Third" if n == 3 else "Fourth"
+    if applicable:
+        summary = "%s-order linear equation with constant coefficients. Solved by: %s." % (
+            ordinal, _method_list(applicable))
+    else:
+        summary = ("%s-order linear equation that the methods here cannot solve: %s"
+                   % (ordinal, "the right-hand side is outside the family undetermined "
+                               "coefficients handles, or the characteristic roots have no closed form."))
+    return {
+        "schema": SCHEMA, "ok": True, "kind": "symbolic", "order": n,
+        "indep": xn, "dep": "y",
+        "input_latex": input_latex,
+        "normal_latex": "%s = %s" % (eq.lhs_tex(), tex(eq.g)),
+        "rhs_expr": None,
+        "ic": None if not ic else {
+            "x0": float(ic[0]), "y0": float(ic[1][0]), "y1": float(ic[1][1]),
+            "latex": ",\\quad ".join("%s(%s) = %s" % (name, tex(ic[0]), tex(v))
+                                      for name, v in zip(names, ic[1])),
+        },
+        "summary": summary, "other_types": [], "methods": methods,
+    }
+
+
 def _numeric(text, x0_text, y0_text, h_text, n_text):
     prob, lhs, rhs = parse_equation(text)
     if prob.order != 1:
@@ -287,6 +336,8 @@ def _numeric(text, x0_text, y0_text, h_text, n_text):
 
 def _add_closing_steps(m, ic):
     """Append the 'answer' and 'check' steps shared by every method."""
+    if m.get("qualitative"):
+        return  # no formula to state or to substitute back
     answer = m.get("particular_latex") if ic else None
     answer = answer or m.get("general_latex")
     if answer:
