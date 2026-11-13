@@ -23,6 +23,7 @@ enum class Mode(val title: String) {
     SecondOrder("Second-order equation"),
     Numerical("Numerical methods"),
     Laplace("Laplace transforms"),
+    Systems("System of two equations"),
 }
 
 class SolverViewModel(app: Application) : AndroidViewModel(app) {
@@ -32,6 +33,11 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
 
     var equation by mutableStateOf(TextFieldValue(""))
         private set
+    /** In the systems section: the right-hand side of y' (the first field holds x'). */
+    var equation2 by mutableStateOf(TextFieldValue(""))
+        private set
+    /** Which equation field the math keys type into (0 or 1). */
+    var activeField by mutableStateOf(0)
     var x0 by mutableStateOf("")
     var y0 by mutableStateOf("")
     /** y'(x0), used by second-order problems. */
@@ -91,6 +97,7 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
 
     private val previewKind: String
         get() = when {
+            mode == Mode.Systems -> "system"
             mode != Mode.Laplace -> "ode"
             inverse -> "inverse"
             else -> "forward"
@@ -109,6 +116,8 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
         if (newMode != mode) {
             mode = newMode
             equation = TextFieldValue("")
+            equation2 = TextFieldValue("")
+            activeField = 0
             x0 = ""; y0 = ""; yPrime0 = ""
             previewLatex = ""; previewError = null; previewOrder = 1; inputError = null
         }
@@ -118,12 +127,23 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
     fun onEquationChange(value: TextFieldValue) {
         val textChanged = value.text != equation.text
         equation = value
-        if (!textChanged) return
+        if (textChanged) refreshPreview()
+    }
+
+    fun onEquation2Change(value: TextFieldValue) {
+        val textChanged = value.text != equation2.text
+        equation2 = value
+        if (textChanged) refreshPreview()
+    }
+
+    private fun refreshPreview() {
         inputError = null
         previewJob?.cancel()
+        val text = if (mode == Mode.Systems) equation.text + ";" + equation2.text else equation.text
+        val blank = equation.text.isBlank() && equation2.text.isBlank()
         previewJob = viewModelScope.launch {
             delay(250)
-            val r = Engine.preview(getApplication(), value.text, previewKind)
+            val r = Engine.preview(getApplication(), if (blank) "" else text, previewKind)
             previewLatex = if (r.ok) r.latex else ""
             previewError = if (r.ok) null else r.error
             if (r.ok) previewOrder = r.order
@@ -134,17 +154,27 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
         onEquationChange(TextFieldValue(text, TextRange(text.length)))
     }
 
-    /** Inserts text at the cursor (used by the math key row). */
+    fun setEquation2Text(text: String) {
+        onEquation2Change(TextFieldValue(text, TextRange(text.length)))
+    }
+
+    /** Inserts text at the cursor of the active field (used by the math key row). */
     fun insert(piece: String) {
-        val current = equation
+        val second = mode == Mode.Systems && activeField == 1
+        val current = if (second) equation2 else equation
         val start = current.selection.min
         val end = current.selection.max
         val text = current.text.substring(0, start) + piece + current.text.substring(end)
-        onEquationChange(TextFieldValue(text, TextRange(start + piece.length)))
+        val updated = TextFieldValue(text, TextRange(start + piece.length))
+        if (second) onEquation2Change(updated) else onEquationChange(updated)
     }
 
+    /** True when enough has been typed to press Solve. */
+    val canSolve: Boolean
+        get() = equation.text.isNotBlank() && (mode != Mode.Systems || equation2.text.isNotBlank())
+
     fun solve(openTab: Int = 0) {
-        if (solving || equation.text.isBlank()) return
+        if (solving || !canSolve) return
         solving = true
         inputError = null
         viewModelScope.launch {
@@ -152,6 +182,8 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
                 Engine.numeric(getApplication(), equation.text, x0, y0, stepSize, stepCount)
             } else if (mode == Mode.Laplace) {
                 Engine.transform(getApplication(), equation.text, inverse)
+            } else if (mode == Mode.Systems) {
+                Engine.system(getApplication(), equation.text, equation2.text, x0, y0)
             } else {
                 // y'(x0) only means something for a second-order equation.
                 val slope = if (isSecondOrder || equation.text.contains("d2y")) yPrime0 else ""

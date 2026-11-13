@@ -11,8 +11,16 @@ What it covers so far:
 - **Second order**: constant coefficients (characteristic equation),
   undetermined coefficients, variation of parameters, homogeneous
   Cauchy-Euler equations and Laplace transforms.
-- **Numerical methods**: Euler, improved Euler and RK4 with step tables and
-  the error against the exact solution when one is known.
+- **Series solutions**: power series at ordinary points and Frobenius series
+  at regular singular points.
+- **Laplace transforms**: forward and inverse transforms with the rules shown
+  (shifting theorems, partial fractions, convolution), and step and impulse
+  forcing in equations.
+- **Systems**: eigenvalue method and matrix exponential for linear 2x2 systems,
+  linearization of nonlinear systems, and phase portraits.
+- **Numerical methods**: Euler, improved Euler, midpoint, RK4,
+  Adams-Bashforth and adaptive RK45, with step tables and the error against
+  the exact solution when one is known.
 
 ## Layout
 

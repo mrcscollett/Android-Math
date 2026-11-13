@@ -38,7 +38,7 @@ class MainActivity : ComponentActivity() {
 
     /**
      * Lets another app or a test open a problem directly. Extras: "equation",
-     * optional "mode" (first, second, numeric, laplace, inverse), "x0", "y0", "yp0", "h", "n"
+     * optional "mode" (first, second, numeric, laplace, inverse, system; a system also takes "equation2"), "x0", "y0", "yp0", "h", "n"
      * and "tab" (0 steps, 1 graph).
      */
     private fun openFromIntent(intent: Intent?) {
@@ -48,11 +48,13 @@ class MainActivity : ComponentActivity() {
                 "second" -> Mode.SecondOrder
                 "numeric" -> Mode.Numerical
                 "laplace", "inverse" -> Mode.Laplace
+                "system" -> Mode.Systems
                 else -> Mode.FirstOrder
             }
         )
         model.chooseInverse(intent.getStringExtra("mode") == "inverse")
         model.setEquationText(equation)
+        intent.getStringExtra("equation2")?.let { model.setEquation2Text(it) }
         model.x0 = intent.getStringExtra("x0") ?: ""
         model.y0 = intent.getStringExtra("y0") ?: ""
         model.yPrime0 = intent.getStringExtra("yp0") ?: ""

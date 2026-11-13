@@ -625,6 +625,78 @@ def test_frobenius_log_case_and_limits():
     assert "singular point" in method(json.loads(solve("x y'' + y = 0", "0", "1", "1")), "series")["reason"]
 
 
+# ---- phase 3: systems -----------------------------------------------------
+
+from deengine import system
+
+LINEAR_SYSTEMS = [
+    ("x + 2y", "3x + 2y", "1", "0", "saddle point"),
+    ("y", "-x", "1", "0", "center"),
+    ("-x - 2y", "2x - y", "1", "1", "spiral sink"),
+    ("x - y", "x + 3y", "0", "1", "improper node (source)"),
+    ("2x", "2y", "1", "2", "star node (source)"),
+    ("-3x + y", "x - 3y", "2", "-1", "node (sink)"),
+    ("x + y", "-2x + 3y", "1", "0", "spiral source"),
+]
+
+
+@pytest.mark.parametrize("f,g,x0,y0,kind", LINEAR_SYSTEMS)
+def test_linear_system_matches_numerical_solution(f, g, x0, y0, kind):
+    r = json.loads(system(f, g, x0, y0))
+    assert r["ok"], r.get("error")
+    assert kind in r["summary"]
+    ff = sp.lambdify((X, Y), sp.sympify(r["field"]["f"], locals={"x": X, "y": Y}), "math")
+    gg = sp.lambdify((X, Y), sp.sympify(r["field"]["g"], locals={"x": X, "y": Y}), "math")
+    state, h, t_end = [float(x0), float(y0)], 0.0005, 0.8
+    for _ in range(int(round(t_end / h))):
+        def d(v):
+            return [ff(*v), gg(*v)]
+        k1 = d(state)
+        k2 = d([a + h / 2 * b for a, b in zip(state, k1)])
+        k3 = d([a + h / 2 * b for a, b in zip(state, k2)])
+        k4 = d([a + h * b for a, b in zip(state, k3)])
+        state = [a + h / 6 * (p + 2 * q + 2 * u + w) for a, p, q, u, w in zip(state, k1, k2, k3, k4)]
+    assert [m["id"] for m in r["methods"] if m["applicable"]] == ["eigen", "expm"]
+    for m in r["methods"][:2]:
+        assert m["verified"] is True, m["verify_note"]
+        xs = float(sp.sympify(m["plot"]["x_expr"], locals={"x": X}).subs(X, t_end))
+        ys = float(sp.sympify(m["plot"]["y_expr"], locals={"x": X}).subs(X, t_end))
+        assert abs(xs - state[0]) < 1e-7 * (1 + abs(state[0])) and abs(ys - state[1]) < 1e-7 * (1 + abs(state[1]))
+
+
+def test_system_general_solution_and_steps():
+    r = json.loads(system("x + 2y", "3x + 2y"))
+    m = method(r, "eigen")
+    assert m["particular_latex"] is None and "C_{1}" in m["general_latex"]
+    text = " ".join(l for s in m["steps"] for l in s["latex"])
+    assert "\\lambda_1 = -1,\\qquad \\lambda_2 = 4" in text
+    assert r["equilibria"] == [{"x": 0.0, "y": 0.0, "label": "saddle point"}]
+    repeated = json.loads(system("x - y", "x + 3y"))
+    assert "generalized eigenvector" in " ".join(s["title"] for s in method(repeated, "eigen")["steps"])
+
+
+def test_nonlinear_system_linearization():
+    r = json.loads(system("x(1 - y)", "y(x - 1)"))   # predator-prey
+    assert [m["id"] for m in r["methods"] if m["applicable"]] == ["linearize"]
+    assert r["equilibria"] == [{"x": 0.0, "y": 0.0, "label": "saddle point"},
+                               {"x": 1.0, "y": 1.0, "label": "center"}]
+    steps = method(r, "linearize")["steps"]
+    assert steps[-1]["table"]["rows"][0][2] == "\\text{saddle point}"
+    assert "do not settle" in steps[3]["text"]            # a center is not conclusive
+    pendulum = json.loads(system("y", "-sin(x)"))
+    assert {e["label"] for e in pendulum["equilibria"]} == {"center", "saddle point"}
+    shifted = json.loads(system("x + 1", "y"))
+    assert shifted["equilibria"][0]["x"] == -1.0 and "constant terms" in shifted["summary"]
+
+
+def test_system_errors_and_preview():
+    assert "autonomous" in json.loads(system("t x", "y"))["error"]
+    assert "both equations" in json.loads(system("x", ""))["error"]
+    assert "both x(0) and y(0)" in json.loads(system("x", "y", "1", ""))["error"]
+    assert json.loads(preview("x + 2y;3x", "system"))["latex"] == "x' = x + 2 y,\\qquad y' = 3 x"
+    assert not json.loads(preview("q;x", "system"))["ok"]
+
+
 def test_export_fixtures():
     """Write sample outputs used by the Kotlin contract tests."""
     import os
@@ -645,3 +717,7 @@ def test_export_fixtures():
         fh.write(numeric("y' = x*y", "0", "1", "0.25", "4"))
     with open(os.path.join(out, "inverse_laplace.json"), "w") as fh:
         fh.write(transform("e^(-2s)/(s^2+1)", "inverse"))
+    with open(os.path.join(out, "system_linear.json"), "w") as fh:
+        fh.write(system("-x - 2y", "2x - y", "1", "1"))
+    with open(os.path.join(out, "system_nonlinear.json"), "w") as fh:
+        fh.write(system("x(1 - y)", "y(x - 1)"))

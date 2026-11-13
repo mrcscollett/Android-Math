@@ -20,9 +20,18 @@ data class SolveResult(
     val summary: String = "",
     @SerialName("other_types") val otherTypes: List<String> = emptyList(),
     val methods: List<Method> = emptyList(),
+    /** For systems: the right-hand sides of x' and y' as plot expressions in x and y. */
+    val field: VectorField? = null,
+    val equilibria: List<Equilibrium> = emptyList(),
 ) {
     val applicableMethods: List<Method> get() = methods.filter { it.applicable }
 }
+
+@Serializable
+data class VectorField(val f: String? = null, val g: String? = null)
+
+@Serializable
+data class Equilibrium(val x: Double, val y: Double, val label: String = "")
 
 @Serializable
 data class InitialCondition(
@@ -50,6 +59,9 @@ data class Method(
 data class PlotExprs(
     @SerialName("general_expr") val generalExpr: String? = null,
     @SerialName("particular_expr") val particularExpr: String? = null,
+    /** For systems: x(t) and y(t) of the solution, written with x standing for t. */
+    @SerialName("x_expr") val xExpr: String? = null,
+    @SerialName("y_expr") val yExpr: String? = null,
     /** Points computed by a numerical method, as [x, y] pairs. */
     val points: List<List<Double>> = emptyList(),
 ) {

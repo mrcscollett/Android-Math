@@ -59,6 +59,11 @@ object Engine {
     suspend fun transform(context: Context, text: String, inverse: Boolean): Pair<String, SolveResult> =
         call(context, "transform", text, if (inverse) "inverse" else "forward")
 
+    /** Solves or analyses the planar system x' = f(x, y), y' = g(x, y). */
+    suspend fun system(
+        context: Context, f: String, g: String, x0: String, y0: String,
+    ): Pair<String, SolveResult> = call(context, "system", f, g, x0, y0)
+
     private suspend fun call(
         context: Context, function: String, vararg args: String,
     ): Pair<String, SolveResult> = withContext(dispatcher) {

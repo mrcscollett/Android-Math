@@ -3,7 +3,7 @@ import json
 
 import sympy as sp
 
-from . import first_order, numeric as numeric_methods, second_order, transforms
+from . import first_order, numeric as numeric_methods, second_order, systems, transforms
 from .parsing import InputError, parse_equation, parse_number
 from .util import dydx, plot_expr, tex, tex_side
 
@@ -22,14 +22,22 @@ def transform(text, direction="forward"):
     return _guard(lambda: work(text))
 
 
+def system(f_text, g_text, x0_text="", y0_text=""):
+    """Solve or analyse the planar system x' = f(x, y), y' = g(x, y)."""
+    return _guard(lambda: systems.solve(f_text or "", g_text or "", x0_text or "", y0_text or ""))
+
+
 def preview(text, kind="ode"):
     """Render what the user has typed so far.
 
-    kind is "ode" for an equation, "forward" for f(t), "inverse" for F(s).
+    kind is "ode" for an equation, "forward" for f(t), "inverse" for F(s),
+    "system" for a pair of right-hand sides written as "f;g".
     """
     try:
         if not text.strip():
             return json.dumps({"ok": True, "latex": "", "order": 1})
+        if kind == "system":
+            return json.dumps({"ok": True, "order": 1, "latex": systems.preview(text)})
         if kind in ("forward", "inverse"):
             from .parsing import parse_expression
             expr, _ = parse_expression(text, ["s" if kind == "inverse" else "t"])

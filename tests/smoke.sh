@@ -106,4 +106,17 @@ expect inverse 'Split into partial fractions'
 open inverse_graph "e^(-2*s)/(s^2+1)" "" "" 1 'text="Graph"' "--es mode inverse"
 expect inverse_graph 'Function of t'
 
+open series "d2y/dx2-x*y=0" "" "" 0 'text="Steps"' "--es mode second"
+expect series 'text="Series solution"'
+expect series 'Find the recurrence relation'
+
+open system "x+2*y" 1 0 0 'text="Steps"' "--es mode system --es equation2 '3*x+2*y'"
+expect system 'text="Eigenvalue method"'
+expect system 'text="Matrix exponential"'
+expect system 'Find the eigenvectors'
+
+open system_graph "x*(1-y)" "" "" 1 'text="Graph"' "--es mode system --es equation2 'y*(x-1)'"
+expect system_graph 'Tap the phase plane'
+expect system_graph 'Equilibria'
+
 exit $fail

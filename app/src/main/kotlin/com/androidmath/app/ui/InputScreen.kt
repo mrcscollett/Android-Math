@@ -37,6 +37,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
@@ -68,8 +69,27 @@ private val INVERSE_EXAMPLES = listOf(
     Example("e^(-2s)/(s^2+1)"), Example("1/(s^2+1)^2"),
 )
 
-/** An example problem: equation, x0, y0 and (for second order) y'(x0). */
-private data class Example(val equation: String, val x0: String = "", val y0: String = "", val slope: String = "")
+/**
+ * An example problem: equation, x0, y0 and (for second order) y'(x0).
+ * For a system, [equation] is x', [second] is y', and x0, y0 are x(0), y(0).
+ */
+private data class Example(
+    val equation: String, val x0: String = "", val y0: String = "", val slope: String = "",
+    val second: String = "",
+)
+
+private val KEYS_XY = listOf(
+    "x", "y", "^", "(", ")", "*", "/", "+", "-", "sin(", "cos(", "e^(", "sqrt(", "pi",
+)
+
+private val SYSTEM_EXAMPLES = listOf(
+    Example("x + 2y", "1", "0", second = "3x + 2y"),
+    Example("y", "1", "0", second = "-x"),
+    Example("-x - 2y", "1", "1", second = "2x - y"),
+    Example("x - y", second = "x + 3y"),
+    Example("x(1 - y)", second = "y(x - 1)"),
+    Example("y", second = "-sin(x)"),
+)
 
 private val FIRST_ORDER_EXAMPLES = listOf(
     Example("y' = x*y", "0", "1"),
@@ -126,6 +146,7 @@ fun InputScreen(model: SolverViewModel) {
                 .padding(horizontal = 16.dp),
         ) {
             val laplace = model.mode == Mode.Laplace
+            val system = model.mode == Mode.Systems
             if (laplace) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(
@@ -143,10 +164,11 @@ fun InputScreen(model: SolverViewModel) {
             OutlinedTextField(
                 value = model.equation,
                 onValueChange = model::onEquationChange,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().onFocusChanged { if (it.isFocused) model.activeField = 0 },
                 label = {
                     Text(
                         when {
+                            system -> "x' ="
                             !laplace -> "Equation"
                             model.inverse -> "F(s)"
                             else -> "f(t)"
@@ -156,6 +178,7 @@ fun InputScreen(model: SolverViewModel) {
                 placeholder = {
                     Text(
                         when {
+                            system -> "x + 2y"
                             laplace && model.inverse -> "1/(s(s+1))"
                             laplace -> "e^(2t) sin(3t)"
                             model.mode == Mode.SecondOrder -> "y'' + 3y' + 2y = e^x"
@@ -175,6 +198,28 @@ fun InputScreen(model: SolverViewModel) {
                 keyboardActions = KeyboardActions(onDone = { submit() }),
             )
 
+            if (system) {
+                OutlinedTextField(
+                    value = model.equation2,
+                    onValueChange = model::onEquation2Change,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp)
+                        .onFocusChanged { if (it.isFocused) model.activeField = 1 },
+                    label = { Text("y' =") },
+                    placeholder = { Text("3x + 2y") },
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Monospace),
+                    isError = model.previewError != null || model.inputError != null,
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.None,
+                        autoCorrectEnabled = false,
+                        keyboardType = KeyboardType.Ascii,
+                        imeAction = ImeAction.Done,
+                    ),
+                    keyboardActions = KeyboardActions(onDone = { submit() }),
+                )
+            }
             // Wraps onto extra lines so every key is visible without scrolling.
             FlowRow(
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
@@ -182,6 +227,7 @@ fun InputScreen(model: SolverViewModel) {
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 val keys = when {
+                    system -> KEYS_XY
                     !laplace -> KEYS
                     model.inverse -> KEYS_S
                     else -> KEYS_T
@@ -203,6 +249,7 @@ fun InputScreen(model: SolverViewModel) {
                     val hint = when {
                         error != null -> ""
                         model.engineReady -> if (laplace) "Your expression appears here as you type"
+                        else if (system) "Your system appears here as you type"
                         else "Your equation appears here as you type"
                         else -> "Starting the solver\u2026"
                     }
@@ -226,6 +273,7 @@ fun InputScreen(model: SolverViewModel) {
                 val second = model.isSecondOrder
                 Text(
                     when {
+                        system -> "Initial point at t = 0 (optional)"
                         numerical -> "Starting point"
                         second -> "Initial conditions (optional)"
                         else -> "Initial condition (optional)"
@@ -234,8 +282,8 @@ fun InputScreen(model: SolverViewModel) {
                     modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    NumberField(model.x0, { model.x0 = it }, "x\u2080")
-                    NumberField(model.y0, { model.y0 = it }, "y(x\u2080)")
+                    NumberField(model.x0, { model.x0 = it }, if (system) "x(0)" else "x\u2080")
+                    NumberField(model.y0, { model.y0 = it }, if (system) "y(0)" else "y(x\u2080)")
                     if (second) {
                         NumberField(model.yPrime0, { model.yPrime0 = it }, "y'(x\u2080)")
                     }
@@ -264,7 +312,7 @@ fun InputScreen(model: SolverViewModel) {
 
             Button(
                 onClick = submit,
-                enabled = !model.solving && model.equation.text.isNotBlank(),
+                enabled = !model.solving && model.canSolve,
                 modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
             ) {
                 if (model.solving) {
@@ -296,11 +344,13 @@ fun InputScreen(model: SolverViewModel) {
                     Mode.SecondOrder -> SECOND_ORDER_EXAMPLES
                     Mode.Numerical -> NUMERICAL_EXAMPLES
                     Mode.Laplace -> if (model.inverse) INVERSE_EXAMPLES else FORWARD_EXAMPLES
+                    Mode.Systems -> SYSTEM_EXAMPLES
                 }
                 for (example in examples) {
                     AssistChip(
                         onClick = {
                             model.setEquationText(example.equation)
+                            if (system) model.setEquation2Text(example.second)
                             model.x0 = example.x0
                             model.y0 = example.y0
                             model.yPrime0 = example.slope
@@ -308,6 +358,10 @@ fun InputScreen(model: SolverViewModel) {
                         label = {
                             Text(
                                 when {
+                                    system && example.x0.isEmpty() ->
+                                        "x' = ${example.equation},  y' = ${example.second}"
+                                    system -> "x' = ${example.equation},  y' = ${example.second},  " +
+                                        "x(0) = ${example.x0},  y(0) = ${example.y0}"
                                     example.x0.isEmpty() -> example.equation
                                     example.slope.isEmpty() ->
                                         "${example.equation},  y(${example.x0}) = ${example.y0}"
@@ -320,7 +374,10 @@ fun InputScreen(model: SolverViewModel) {
                 }
             }
             Text(
-                if (laplace) {
+                if (system) {
+                    "Enter the right-hand sides in terms of x and y. Linear systems are solved " +
+                        "exactly; nonlinear ones are analysed near their equilibrium points."
+                } else if (laplace) {
                     "Use u(t-a) for a unit step switched on at t = a and delta(t-a) for an " +
                         "impulse. A delay in F(s) is written e^(-a s)."
                 } else {

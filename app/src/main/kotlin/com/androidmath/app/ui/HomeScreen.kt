@@ -36,7 +36,7 @@ private val SECTIONS = listOf(
     Section(
         "Second-order equations",
         "Constant coefficients, undetermined coefficients, variation of parameters, " +
-            "Cauchy\u2013Euler, and Laplace transforms for initial value problems",
+            "Cauchy\u2013Euler, series solutions, and Laplace transforms with step and impulse forcing",
         Mode.SecondOrder,
     ),
     Section(
@@ -50,8 +50,13 @@ private val SECTIONS = listOf(
             "steps and impulses, convolution",
         Mode.Laplace,
     ),
-    Section("Systems", "Eigenvalue method, phase portraits, linearization", null),
-    Section("Series and PDEs", "Power series, Fourier series, heat and wave equations", null),
+    Section(
+        "Systems",
+        "Eigenvalue method and matrix exponential for linear systems, linearization " +
+            "of nonlinear ones, and phase portraits",
+        Mode.Systems,
+    ),
+    Section("Fourier series and PDEs", "Fourier series, heat, wave and Laplace equations", null),
     Section("Physics 1", "Motion, drag, springs, pendulums, cooling", null),
     Section("Physics 2", "RC, RL and RLC circuits, charged particles, decay", null),
 )

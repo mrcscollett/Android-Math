@@ -163,6 +163,52 @@ object Plot {
     }
 
     /**
+     * Arrows of the planar field (f, g) on a grid, all with the same on-screen
+     * length. Returns pixel coordinates [tailX, tailY, headX, headY, ...].
+     * Points where the field vanishes or is undefined are skipped.
+     */
+    fun vectorField(
+        f: Expr, g: Expr, vp: Viewport, widthPx: Float, heightPx: Float,
+        spacingPx: Float, lengthPx: Float,
+    ): FloatArray {
+        if (widthPx <= 0f || heightPx <= 0f || spacingPx <= 0f) return FloatArray(0)
+        val nx = (widthPx / spacingPx).toInt().coerceAtLeast(1)
+        val ny = (heightPx / spacingPx).toInt().coerceAtLeast(1)
+        val out = FloatArray(nx * ny * 4)
+        var k = 0
+        val sx = widthPx / vp.width
+        val sy = heightPx / vp.height
+        for (i in 0 until nx) {
+            val px = (i + 0.5f) * widthPx / nx
+            val x = vp.toWorldX(px, widthPx)
+            for (j in 0 until ny) {
+                val py = (j + 0.5f) * heightPx / ny
+                val y = vp.toWorldY(py, heightPx)
+                val dx = f.eval(x, y, 0.0) * sx
+                val dy = -g.eval(x, y, 0.0) * sy
+                val norm = hypot(dx, dy)
+                if (!norm.isFinite() || norm < 1e-12) continue
+                val hx = (dx / norm * lengthPx / 2).toFloat()
+                val hy = (dy / norm * lengthPx / 2).toFloat()
+                out[k++] = px - hx; out[k++] = py - hy
+                out[k++] = px + hx; out[k++] = py + hy
+            }
+        }
+        return if (k == out.size) out else out.copyOf(k)
+    }
+
+    /** Points [x0, y0, x1, y1, ...] of the curve (xOf(t), yOf(t)) for t in [tMin, tMax]. */
+    fun parametric(xOf: (Double) -> Double, yOf: (Double) -> Double, tMin: Double, tMax: Double, samples: Int): DoubleArray {
+        val out = DoubleArray((samples + 1) * 2)
+        for (i in 0..samples) {
+            val t = tMin + (tMax - tMin) * i / samples
+            out[2 * i] = xOf(t)
+            out[2 * i + 1] = yOf(t)
+        }
+        return out
+    }
+
+    /**
      * Samples y = g(x) across the window and returns polylines in pixels,
      * each as [x0, y0, x1, y1, ...]. The curve is broken wherever the
      * function is undefined or jumps across the window (an asymptote).
@@ -184,6 +230,8 @@ object Plot {
     private fun polylines(xs: DoubleArray, ys: DoubleArray, vp: Viewport, widthPx: Float, heightPx: Float): List<FloatArray> {
         val lo = vp.yMin - 2 * vp.height
         val hi = vp.yMax + 2 * vp.height
+        val left = vp.xMin - 2 * vp.width
+        val right = vp.xMax + 2 * vp.width
         val result = ArrayList<FloatArray>()
         var current = ArrayList<Float>()
 
@@ -193,7 +241,7 @@ object Plot {
         }
 
         fun add(x: Double, y: Double) {
-            current.add(vp.toPxX(x, widthPx))
+            current.add(vp.toPxX(x.coerceIn(left, right), widthPx))
             current.add(vp.toPxY(y.coerceIn(lo, hi), heightPx))
         }
 
@@ -201,8 +249,8 @@ object Plot {
         var prevFinite = false
         for (i in xs.indices) {
             val y = ys[i]
-            val finite = y.isFinite()
-            val inside = finite && y > lo && y < hi
+            val finite = y.isFinite() && xs[i].isFinite()
+            val inside = finite && y > lo && y < hi && xs[i] > left && xs[i] < right
             if (inside) {
                 // Entering from off-window: start at the clamped previous point
                 // unless it was on the opposite side of an asymptote.

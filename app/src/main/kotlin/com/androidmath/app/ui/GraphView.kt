@@ -239,3 +239,130 @@ private fun covers(marker: Offset?, left: Float, top: Float, width: Int, height:
     return marker.x > left - pad && marker.x < left + width + pad &&
         marker.y > top - pad && marker.y < top + height + pad
 }
+
+/**
+ * Phase plane of the system x' = f(x, y), y' = g(x, y): the direction field,
+ * the equilibrium points, the exact solution curve (x(t), y(t)) when known,
+ * and the orbit through every tapped point.
+ */
+@Composable
+fun PhaseView(
+    f: Expr,
+    g: Expr,
+    exactX: Expr?,
+    exactY: Expr?,
+    ic: InitialCondition?,
+    equilibria: List<com.androidmath.core.Equilibrium>,
+    tapped: List<Pair<Double, Double>>,
+    resetKey: Int,
+    onTap: (Double, Double) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var size by remember { mutableStateOf(IntSize.Zero) }
+    var viewport by remember(resetKey) { mutableStateOf<Viewport?>(null) }
+    val currentOnTap by rememberUpdatedState(onTap)
+
+    val w = size.width.toFloat()
+    val h = size.height.toFloat()
+    val vp = viewport ?: if (w > 0 && h > 0) {
+        // Frame every equilibrium and the initial point with three units of margin.
+        val marks = ArrayList<Double>()
+        for (e in equilibria) {
+            marks.add(e.x - 3); marks.add(e.y - 3); marks.add(e.x + 3); marks.add(e.y + 3)
+        }
+        if (ic != null) {
+            marks.add(ic.x0 - 3); marks.add(ic.y0 - 3); marks.add(ic.x0 + 3); marks.add(ic.y0 + 3)
+        }
+        val start = if (marks.isEmpty()) Viewport.centred(0.0, 0.0, 5.0, w, h)
+        else Viewport.fitting(marks.toDoubleArray(), w, h)
+        start.also { viewport = it }
+    } else null
+
+    val colors = MaterialTheme.colorScheme
+    val density = LocalDensity.current
+    val measurer = rememberTextMeasurer()
+    val labelStyle = TextStyle(fontSize = 11.sp, color = colors.onSurfaceVariant)
+    val spacingPx = with(density) { 28.dp.toPx() }
+    val lengthPx = with(density) { 14.dp.toPx() }
+
+    val arrows = remember(f, g, vp, size) {
+        if (vp != null) Plot.vectorField(f, g, vp, w, h, spacingPx, lengthPx) else FloatArray(0)
+    }
+    val exactLines = remember(exactX, exactY, vp, size) {
+        if (exactX != null && exactY != null && vp != null) {
+            val curve = Plot.parametric(
+                { t -> exactX.eval(t, 0.0, 0.0) }, { t -> exactY.eval(t, 0.0, 0.0) },
+                -12.0, 12.0, 2400,
+            )
+            Plot.path(curve, vp, w, h)
+        } else emptyList()
+    }
+    val starts = remember(tapped.toList(), ic, exactX) {
+        val list = tapped.toMutableList()
+        if (ic != null && exactX == null) list.add(0, ic.x0 to ic.y0)
+        list
+    }
+    val orbitLines = remember(f, g, starts, vp, size) {
+        if (vp == null) emptyList()
+        else starts.flatMap { (x0, y0) ->
+            Plot.path(Ode.trajectory(f, g, x0, y0, vp.xMin, vp.xMax, vp.yMin, vp.yMax), vp, w, h)
+        }
+    }
+
+    Canvas(
+        modifier = modifier
+            .clipToBounds()
+            .onSizeChanged { size = it }
+            .pointerInput(resetKey) {
+                detectTransformGestures { centroid, pan, zoom, _ ->
+                    val current = viewport ?: return@detectTransformGestures
+                    val width = this.size.width.toFloat()
+                    val height = this.size.height.toFloat()
+                    viewport = current
+                        .zoomedBy(zoom, centroid.x, centroid.y, width, height)
+                        .pannedBy(pan.x, pan.y, width, height)
+                }
+            }
+            .pointerInput(resetKey) {
+                detectTapGestures { point ->
+                    val current = viewport ?: return@detectTapGestures
+                    currentOnTap(
+                        current.toWorldX(point.x, this.size.width.toFloat()),
+                        current.toWorldY(point.y, this.size.height.toFloat()),
+                    )
+                }
+            },
+    ) {
+        if (vp == null) return@Canvas
+        val marker = ic?.let { Offset(vp.toPxX(it.x0, w), vp.toPxY(it.y0, h)) }
+        drawGrid(vp, measurer, labelStyle, colors.outlineVariant, colors.onSurface, marker)
+
+        val fieldColor = colors.onSurfaceVariant.copy(alpha = 0.55f)
+        val stroke = 1.25.dp.toPx()
+        val head = 2.dp.toPx()
+        var i = 0
+        while (i + 3 < arrows.size) {
+            val tip = Offset(arrows[i + 2], arrows[i + 3])
+            drawLine(fieldColor, Offset(arrows[i], arrows[i + 1]), tip, stroke, StrokeCap.Round)
+            // A dot marks the head, so the direction of motion is visible.
+            drawCircle(fieldColor, head, tip)
+            i += 4
+        }
+
+        drawPolylines(orbitLines, colors.tertiary, 2.dp.toPx())
+        drawPolylines(exactLines, colors.primary, 3.dp.toPx())
+
+        for (e in equilibria) {
+            val centre = Offset(vp.toPxX(e.x, w), vp.toPxY(e.y, h))
+            drawCircle(colors.surface, 6.dp.toPx(), centre)
+            drawCircle(colors.error, 6.dp.toPx(), centre, style = Stroke(2.dp.toPx()))
+        }
+        for ((x0, y0) in tapped) {
+            drawCircle(colors.tertiary, 4.dp.toPx(), Offset(vp.toPxX(x0, w), vp.toPxY(y0, h)))
+        }
+        if (marker != null) {
+            drawCircle(colors.surface, 7.dp.toPx(), marker)
+            drawCircle(colors.primary, 5.dp.toPx(), marker)
+        }
+    }
+}

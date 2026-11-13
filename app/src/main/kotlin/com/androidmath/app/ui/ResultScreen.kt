@@ -106,6 +106,8 @@ fun ResultScreen(model: SolverViewModel) {
                     script = "showSolution(${jsString(model.resultJson)}, ${jsString(method?.id ?: "")});",
                     modifier = Modifier.fillMaxSize(),
                 )
+            } else if (result.kind == "system") {
+                PhaseTab(model)
             } else {
                 GraphTab(model)
             }
@@ -201,6 +203,68 @@ private fun GraphTab(model: SolverViewModel) {
                 } else {
                     "Drag to move, pinch to zoom."
                 },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PhaseTab(model: SolverViewModel) {
+    val result = model.result ?: return
+    val method = model.selectedMethod
+    val f = remember(result.field) { Expr.parseOrNull(result.field?.f) }
+    val g = remember(result.field) { Expr.parseOrNull(result.field?.g) }
+    val exactX = remember(method) { Expr.parseOrNull(method?.plot?.xExpr) }
+    val exactY = remember(method) { Expr.parseOrNull(method?.plot?.yExpr) }
+
+    Column(Modifier.fillMaxSize()) {
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            if (f == null || g == null) {
+                Text(
+                    "This system uses a function the grapher does not support yet.",
+                    modifier = Modifier.align(Alignment.Center).padding(24.dp),
+                )
+            } else {
+                PhaseView(
+                    f = f, g = g,
+                    exactX = exactX, exactY = exactY,
+                    ic = result.ic,
+                    equilibria = result.equilibria,
+                    tapped = model.tappedPoints,
+                    resetKey = model.viewResetKey,
+                    onTap = { x, y -> model.tappedPoints.add(x to y) },
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+        Column(
+            modifier = Modifier
+                .align(Alignment.CenterHorizontally)
+                .widthIn(max = CONTENT_WIDTH)
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (exactX != null && exactY != null) {
+                    Legend(MaterialTheme.colorScheme.primary, "Exact solution")
+                    Spacer(Modifier.width(16.dp))
+                }
+                Legend(MaterialTheme.colorScheme.tertiary, "Trajectories")
+                if (result.equilibria.isNotEmpty()) {
+                    Spacer(Modifier.width(16.dp))
+                    Legend(MaterialTheme.colorScheme.error, "Equilibria")
+                }
+                Spacer(Modifier.weight(1f))
+                if (model.tappedPoints.isNotEmpty()) {
+                    TextButton(onClick = { model.tappedPoints.clear() }) { Text("Clear") }
+                }
+                TextButton(onClick = { model.viewResetKey++ }) { Text("Reset view") }
+            }
+            Text(
+                "Tap the phase plane to draw the trajectory through that point. The axes are " +
+                    "x and y; time runs along each curve in the direction of the dots.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

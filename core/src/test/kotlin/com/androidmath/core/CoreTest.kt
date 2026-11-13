@@ -96,6 +96,32 @@ class OdeTest {
         assertEquals(kotlin.math.ln(2.0), at(curve, 2.0), 1e-7)
     }
 
+    @Test fun closedOrbitOfACenter() {
+        // x' = y, y' = -x: circles around the origin, traversed clockwise.
+        val f = Expr.parseOrNull("y")!!
+        val g = Expr.parseOrNull("-x")!!
+        val orbit = Ode.trajectory(f, g, 2.0, 0.0, -5.0, 5.0, -5.0, 5.0)
+        assertTrue(orbit.size > 200)
+        for (i in 0 until orbit.size / 2) {
+            assertEquals(2.0, kotlin.math.hypot(orbit[2 * i], orbit[2 * i + 1]), 1e-6)
+        }
+        val start = orbit.size / 2 / 2   // the middle of the array is the starting point
+        assertTrue(orbit[2 * (start + 5) + 1] < 0.0)   // forward in time y decreases first
+    }
+
+    @Test fun orbitStopsAtEquilibriumAndOffWindow() {
+        // x' = -x, y' = -y: straight into the origin forwards, off the window backwards.
+        val f = Expr.parseOrNull("-x")!!
+        val g = Expr.parseOrNull("-y")!!
+        val orbit = Ode.trajectory(f, g, 1.0, 1.0, -3.0, 3.0, -3.0, 3.0)
+        assertTrue(orbit.all { it.isFinite() })
+        val last = orbit.size - 2
+        assertTrue(kotlin.math.hypot(orbit[last], orbit[last + 1]) < 0.05)
+        assertTrue(orbit[0] > 3.0 && orbit[0] < 9.5)
+        assertEquals(orbit[0], orbit[1], 1e-9)
+        assertEquals(2, Ode.trajectory(f, g, 0.0, 0.0, -3.0, 3.0, -3.0, 3.0).size)
+    }
+
     @Test fun passesThroughTurningPoints() {
         // y' = -x, y(0) = 2 is 2 - x^2/2: the slope changes sign smoothly.
         val f = Expr.parseOrNull("-x")!!
@@ -148,6 +174,23 @@ class PlotTest {
             val len = Math.hypot((segs[4 * i + 2] - segs[4 * i]).toDouble(), (segs[4 * i + 3] - segs[4 * i + 1]).toDouble())
             assertEquals(12.0, len, 1e-3)
         }
+    }
+
+    @Test fun vectorFieldArrows() {
+        val f = Expr.parseOrNull("y")!!
+        val g = Expr.parseOrNull("-x")!!
+        val arrows = Plot.vectorField(f, g, Viewport(-3.0, 3.0, -3.0, 3.0), 300f, 300f, 30f, 12f)
+        assertEquals(10 * 10 * 4, arrows.size)
+        // At the top-left sample (x < 0, y > 0) the field (y, -x) points right and up on screen.
+        assertTrue(arrows[2] > arrows[0])
+        assertTrue(arrows[3] < arrows[1])
+        val still = Plot.vectorField(Expr.parseOrNull("0*x")!!, Expr.parseOrNull("0*y")!!, Viewport(-1.0, 1.0, -1.0, 1.0), 100f, 100f, 50f, 10f)
+        assertEquals(0, still.size)
+        val circle = Plot.parametric({ kotlin.math.cos(it) }, { kotlin.math.sin(it) }, 0.0, PI, 2)
+        assertEquals(6, circle.size)
+        assertEquals(-1.0, circle[4], 1e-12)
+        val pieces = Plot.path(doubleArrayOf(0.0, 0.0, 1e9, 1.0, 0.5, 0.5), Viewport(-1.0, 1.0, -1.0, 1.0), 100f, 100f)
+        assertTrue(pieces.flatMap { it.toList() }.all { abs(it) < 1000f })
     }
 
     @Test fun curveBreaksAtAsymptotes() {
@@ -239,5 +282,22 @@ class ModelTest {
         val f = Expr.parseOrNull(m.plot!!.particularExpr)!!
         assertEquals(0.0, f.eval(1.0, 0.0, 0.0), 0.0)
         assertEquals(kotlin.math.sin(1.0), f.eval(3.0, 0.0, 0.0), 1e-12)
+    }
+
+    @Test fun parsesSystems() {
+        val linear = EngineJson.solveResult(fixture("system_linear.json"))
+        assertEquals("system", linear.kind)
+        assertEquals(listOf("eigen", "expm"), linear.applicableMethods.map { it.id })
+        val f = Expr.parseOrNull(linear.field!!.f)!!
+        assertEquals(-5.0, f.eval(1.0, 2.0, 0.0), 0.0)
+        assertEquals("spiral sink", linear.equilibria.single().label)
+        val xt = Expr.parseOrNull(linear.applicableMethods[0].plot!!.xExpr)!!
+        val yt = Expr.parseOrNull(linear.applicableMethods[0].plot!!.yExpr)!!
+        assertEquals(1.0, xt.eval(0.0, 0.0, 0.0), 1e-12)
+        assertEquals(1.0, yt.eval(0.0, 0.0, 0.0), 1e-12)
+        val nonlinear = EngineJson.solveResult(fixture("system_nonlinear.json"))
+        assertEquals(2, nonlinear.equilibria.size)
+        assertNull(nonlinear.applicableMethods.single().plot!!.xExpr)
+        assertNotNull(Expr.parseOrNull(nonlinear.field!!.g))
     }
 }
