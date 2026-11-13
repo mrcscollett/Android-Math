@@ -266,4 +266,28 @@ object Plot {
         flush()
         return result
     }
+
+    /**
+     * Samples u(x, y) at the centres of an nx-by-ny grid over the rectangle and
+     * maps each value to 0..1 between [uMin] and [uMax] (clamped). The result
+     * is row-major with row 0 at the TOP of the rectangle (largest y), ready
+     * to be drawn as coloured cells. Undefined values come out as NaN.
+     */
+    fun heatMap(
+        u: Expr, xMin: Double, xMax: Double, yMin: Double, yMax: Double,
+        nx: Int, ny: Int, uMin: Double, uMax: Double,
+    ): FloatArray {
+        val out = FloatArray(nx * ny)
+        val range = if (uMax - uMin > 1e-300) uMax - uMin else 1.0
+        for (row in 0 until ny) {
+            val y = yMax - (row + 0.5) * (yMax - yMin) / ny
+            for (col in 0 until nx) {
+                val x = xMin + (col + 0.5) * (xMax - xMin) / nx
+                val value = u.eval(x, y, 0.0)
+                out[row * nx + col] =
+                    if (value.isFinite()) ((value - uMin) / range).coerceIn(0.0, 1.0).toFloat() else Float.NaN
+            }
+        }
+        return out
+    }
 }

@@ -77,7 +77,11 @@ private val SECTIONS = listOf(
         "Two-point boundary conditions, and the eigenvalue problem behind separation of variables",
         Mode.Boundary,
     ),
-    Section("Partial differential equations", "Heat, wave and Laplace equations", null),
+    Section(
+        "Partial differential equations",
+        "Heat, wave and Laplace equations by separation of variables, with animated solutions",
+        Mode.Pde,
+    ),
     Section("Physics 1", "Motion, drag, springs, pendulums, cooling", null),
     Section("Physics 2", "RC, RL and RLC circuits, charged particles, decay", null),
 )

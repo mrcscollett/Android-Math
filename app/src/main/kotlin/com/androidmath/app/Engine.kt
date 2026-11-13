@@ -80,6 +80,16 @@ object Engine {
     suspend fun eigenProblem(context: Context, kind: String, length: String): Pair<String, SolveResult> =
         call(context, "eigen_problem", kind, length)
 
+    /**
+     * Heat, wave or Laplace equation. [kind] is "heat", "wave" or "laplace";
+     * p1 and p2 are L and k, L and c, or a and b; [bc] is the boundary-condition
+     * code (heat) or the side carrying the data (Laplace).
+     */
+    suspend fun pde(
+        context: Context, kind: String, f: String, g: String, p1: String, p2: String,
+        bc: String, t1: String, t2: String,
+    ): Pair<String, SolveResult> = call(context, "pde", kind, f, g, p1, p2, bc, t1, t2)
+
     private suspend fun call(
         context: Context, function: String, vararg args: String,
     ): Pair<String, SolveResult> = withContext(dispatcher) {

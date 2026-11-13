@@ -25,9 +25,29 @@ data class SolveResult(
     val equilibria: List<Equilibrium> = emptyList(),
     /** Half-length of the interval of interest (Fourier, boundary, eigenvalue problems). */
     val span: Double? = null,
+    /** For kind "pde": "heat", "wave" or "laplace". */
+    val pde: String = "",
+    /** For PDEs: the region the solution is drawn on and its range of values. */
+    val domain: Domain? = null,
+    /** For heat and wave problems: the initial profile f(x). */
+    @SerialName("initial_expr") val initialExpr: String? = null,
+    /** True when the solution is a function of two space variables, drawn as a heat map. */
+    val surface: Boolean = false,
 ) {
     val applicableMethods: List<Method> get() = methods.filter { it.applicable }
 }
+
+@Serializable
+data class Domain(
+    @SerialName("x_min") val xMin: Double = 0.0,
+    @SerialName("x_max") val xMax: Double = 1.0,
+    @SerialName("y_min") val yMin: Double = 0.0,
+    @SerialName("y_max") val yMax: Double = 1.0,
+    /** Length of the time interval worth showing (heat and wave problems). */
+    @SerialName("t_max") val tMax: Double = 0.0,
+    @SerialName("u_min") val uMin: Double = -1.0,
+    @SerialName("u_max") val uMax: Double = 1.0,
+)
 
 @Serializable
 data class VectorField(val f: String? = null, val g: String? = null)

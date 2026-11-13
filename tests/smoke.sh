@@ -145,16 +145,32 @@ open system_three "x+y" 1 0 0 'text="Steps"' "--es mode system --es equation2 'y
 expect system_three 'text="Eigenvalue method"'
 expect system_three 'Find the eigenvectors'
 
+open heat "x*(1-x)" 1 1 0 'text="Steps"' "--es mode heat --es bc 00"
+expect heat 'text="Heat equation"'
+expect heat 'Separate the variables'
+expect heat 'Long-time behaviour'
+
+open wave "sin(pi*x)" 1 2 1 'text="Graph"' "--es mode wave"
+expect wave 'text="Wave equation"'
+expect wave 'text="Play"'
+expect wave 'Initial profile'
+
+open laplace "sin(pi*x)" 1 1 0 'text="Steps"' "--es mode laplace --es bc top"
+expect laplace 'Solve in the other direction'
+
 # The problems opened above must now be listed on the home screen.
 adb shell am force-stop $PKG
 adb shell "am start -W -n $PKG/.MainActivity" >/dev/null
 sleep 8
-adb shell input swipe 160 500 160 100 300
-adb shell input swipe 160 500 160 100 300
-adb shell input swipe 160 500 160 100 300
-sleep 2
-adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1
-adb exec-out cat /sdcard/ui.xml > "$OUT/history.xml"
+# The list sits below the section cards and only on-screen rows are in the
+# dump, so scroll a screenful at a time until the Recent header shows up.
+for i in $(seq 1 15); do
+  adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1
+  adb exec-out cat /sdcard/ui.xml > "$OUT/history.xml"
+  grep -q 'Clear recent' "$OUT/history.xml" && break
+  adb shell input swipe 160 520 160 180 400
+  sleep 1
+done
 adb exec-out screencap -p > "$OUT/history.png"
 expect history 'Clear recent'
 

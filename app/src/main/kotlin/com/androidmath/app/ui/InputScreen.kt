@@ -162,6 +162,11 @@ private val NUMERICAL_EXAMPLES = listOf(
 
 @Composable
 fun InputScreen(model: SolverViewModel) {
+    if (model.mode == Mode.Pde) {
+        // The PDE section has its own form (see PdeScreens.kt).
+        PdeInputScreen(model)
+        return
+    }
     val keyboard = LocalSoftwareKeyboardController.current
     val submit = {
         keyboard?.hide()
@@ -490,6 +495,7 @@ fun InputScreen(model: SolverViewModel) {
                     Mode.Systems -> SYSTEM_EXAMPLES
                     Mode.Fourier -> FOURIER_EXAMPLES
                     Mode.Boundary -> emptyList()
+                    Mode.Pde -> emptyList()
                 }
                 if (boundary && !eigen) {
                     for (example in BOUNDARY_EXAMPLES) {

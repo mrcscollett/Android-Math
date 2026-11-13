@@ -1190,6 +1190,216 @@ def test_three_by_three_general_and_errors():
     assert "asymptotically stable (every" in json.loads(system("-x", "-2y", "", "", "-3z", ""))["summary"]
 
 
+# ---- PDEs: heat, wave, Laplace --------------------------------------------
+
+from deengine import pde
+
+
+def _pde_fn(expr_text):
+    """u(x, y) from a plot string, where y is time (or the second space variable)."""
+    step = lambda v, *rest: 0.0 if v < 0 else 1.0
+    expr = sp.sympify(expr_text, locals={"x": X, "y": Y, "Heaviside": sp.Heaviside, "floor": sp.floor})
+    fn = sp.lambdify((X, Y), expr, [{"Heaviside": step, "floor": math.floor}, "math"])
+    return lambda a, b: float(fn(a, b))
+
+
+def _pde(*args):
+    r = json.loads(pde(*args))
+    assert r["ok"], r.get("error")
+    assert r["kind"] == "pde" and r["rhs_expr"] is None
+    return r
+
+
+def test_heat_single_mode_is_exact():
+    r = _pde("heat", "sin(pi x)", "", "1", "1", "00", "", "")
+    m = method(r, "separation")
+    assert m["verified"] is True
+    u = _pde_fn(m["plot"]["particular_expr"])
+    for xv, tv in ((0.3, 0.05), (0.5, 0.2), (0.8, 0.01)):
+        assert abs(u(xv, tv) - math.exp(-math.pi ** 2 * tv) * math.sin(math.pi * xv)) < 1e-9
+    assert "\\approx" not in m["particular_latex"]
+    assert abs(r["domain"]["t_max"] - math.log(50) / math.pi ** 2) < 1e-9
+    assert r["initial_expr"] == "sin(pi*x)" and r["surface"] is False
+
+
+def _heat_residual(u, k, L, t_max):
+    worst = 0.0
+    h, dt = L * 1e-3, t_max * 1e-4
+    for xv in (0.2 * L, 0.55 * L, 0.9 * L):
+        for tv in (0.1 * t_max, 0.6 * t_max):
+            ut = (u(xv, tv + dt) - u(xv, tv - dt)) / (2 * dt)
+            uxx = (u(xv + h, tv) - 2 * u(xv, tv) + u(xv - h, tv)) / (h * h)
+            worst = max(worst, abs(ut - k * uxx))
+    return worst
+
+
+@pytest.mark.parametrize("f,L,k,bc,t1,t2", [
+    ("x(1-x)", "1", "1/2", "00", "", ""),
+    ("x", "pi", "1", "nn", "", ""),
+    ("1", "2", "1", "0n", "", ""),
+    ("x", "1", "1", "n0", "", ""),
+    ("0", "1", "1", "tt", "0", "100"),
+    ("sin(pi x)", "1", "1", "tt", "1", "3"),
+])
+def test_heat_equation_and_boundary_conditions(f, L, k, bc, t1, t2):
+    r = _pde("heat", f, "", L, k, bc, t1, t2)
+    m = method(r, "separation")
+    assert m["verified"] is True, m["verify_note"]
+    u = _pde_fn(m["plot"]["particular_expr"])
+    Lf, kf, t_max = float(sp.sympify(L)), float(sp.sympify(k)), r["domain"]["t_max"]
+    scale = r["domain"]["u_max"] - r["domain"]["u_min"]
+    assert _heat_residual(u, kf, Lf, t_max) < 1e-3 * scale / t_max
+    tv, h = 0.4 * t_max, 1e-5 * Lf
+    left = (u(h, tv) - u(0.0, tv)) / h if bc in ("nn", "n0") else u(0.0, tv) - (float(t1) if bc == "tt" else 0.0)
+    right = (u(Lf, tv) - u(Lf - h, tv)) / h if bc in ("nn", "0n") else u(Lf, tv) - (float(t2) if bc == "tt" else 0.0)
+    assert abs(left) < 1e-3 * scale and abs(right) < 1e-3 * scale
+    # The initial data is reproduced away from the ends.
+    f0 = sp.lambdify(X, sp.sympify(r["initial_expr"], locals={"x": X}), "math")
+    assert max(abs(u(Lf * i / 10, 0.0) - f0(Lf * i / 10)) for i in range(3, 8)) < 0.05 * scale
+    assert [s["title"] for s in m["steps"]][-2:] == ["Solution", "Check"]
+
+
+def test_heat_long_time_limits():
+    insulated = _pde("heat", "x", "", "pi", "1", "nn", "", "")
+    u = _pde_fn(method(insulated, "separation")["plot"]["particular_expr"])
+    assert abs(u(1.0, 50.0) - math.pi / 2) < 1e-9          # the mean of f
+    assert "average" in " ".join(s["text"] for s in method(insulated, "separation")["steps"])
+    held = _pde("heat", "0", "", "1", "1", "tt", "0", "100")
+    u = _pde_fn(method(held, "separation")["plot"]["particular_expr"])
+    assert abs(u(0.3, 50.0) - 30.0) < 1e-9                 # the steady state 100 x
+    assert "Subtract the steady state" == method(held, "separation")["steps"][0]["title"]
+    quarter = _pde("heat", "1", "", "2", "1", "0n", "", "")
+    assert "2n-1" in " ".join(l for s in method(quarter, "separation")["steps"] for l in s["latex"])
+
+
+def test_heat_coefficient_formula_in_steps():
+    r = _pde("heat", "x(1-x)", "", "1", "1", "00", "", "")
+    step_ = next(s for s in method(r, "separation")["steps"] if s["title"] == "Find the coefficients")
+    assert any("b_n = " in l and "\\int" not in l for l in step_["latex"])
+    table = next(s for s in step_["substeps"] if "table" in s)["table"]
+    assert table["rows"][0][0] == "1" and abs(float(table["rows"][0][1]) - 8 / math.pi ** 3) < 1e-5
+
+
+def test_wave_standing_mode_and_period():
+    r = _pde("wave", "sin(pi x)", "", "1", "2", "", "", "")
+    assert [m["id"] for m in r["methods"]] == ["separation", "dalembert"]
+    assert abs(r["domain"]["t_max"] - 2.0) < 1e-12 and r["domain"]["u_min"] == -1.0
+    for m in r["methods"]:
+        assert m["verified"] is True
+        u = _pde_fn(m["plot"]["particular_expr"])
+        for xv, tv in ((0.3, 0.1), (0.7, 0.45), (0.5, 1.3)):
+            assert abs(u(xv, tv) - math.cos(2 * math.pi * tv) * math.sin(math.pi * xv)) < 1e-9, m["id"]
+
+
+def _plucked(xv, tv):
+    """Exact plucked-string solution (L = 1, c = 1) from the odd periodic extension."""
+    def tri(s):
+        s = (s + 1) % 2 - 1
+        sign = -1.0 if s < 0 else 1.0
+        s = abs(s)
+        return sign * (s if s < 0.5 else 1 - s)
+    return (tri(xv - tv) + tri(xv + tv)) / 2
+
+
+def test_plucked_string_matches_dalembert():
+    r = _pde("wave", "x (1 - u(x - 1/2)) + (1 - x) u(x - 1/2)", "", "1", "1", "", "", "")
+    series = _pde_fn(method(r, "separation")["plot"]["particular_expr"])
+    travelling = _pde_fn(method(r, "dalembert")["plot"]["particular_expr"])
+    for xv, tv in ((0.2, 0.1), (0.5, 0.3), (0.75, 0.9), (0.4, 1.7), (0.6, 2.4)):
+        exact = _plucked(xv, tv)
+        assert abs(travelling(xv, tv) - exact) < 1e-12
+        assert abs(series(xv, tv) - exact) < 0.02
+    assert abs(travelling(0.3, 2.0) - travelling(0.3, 0.0)) < 1e-12   # period 2L/c
+
+
+def test_wave_with_initial_velocity():
+    r = _pde("wave", "", "sin(pi x)", "1", "1", "", "", "")
+    for m in r["methods"]:
+        assert m["applicable"] and m["verified"] is True, m["id"]
+        u = _pde_fn(m["plot"]["particular_expr"])
+        for xv, tv in ((0.3, 0.2), (0.6, 0.7), (0.5, 1.4)):
+            assert abs(u(xv, tv) - math.sin(math.pi * tv) * math.sin(math.pi * xv) / math.pi) < 1e-9, m["id"]
+    both = _pde("wave", "x(1-x)", "x", "1", "1", "", "", "")
+    a = _pde_fn(method(both, "separation")["plot"]["particular_expr"])
+    b = _pde_fn(method(both, "dalembert")["plot"]["particular_expr"])
+    assert max(abs(a(xv, tv) - b(xv, tv)) for xv in (0.2, 0.5, 0.8) for tv in (0.3, 1.1)) < 0.02
+    h = 1e-5
+    assert abs((b(0.4, h) - b(0.4, 0.0)) / h - 0.4) < 1e-3          # u_t(x, 0) = g(x) = x
+    assert abs(b(0.0, 0.7)) < 1e-12 and abs(b(1.0, 0.7)) < 1e-9
+
+
+def test_laplace_single_mode_and_sides():
+    r = _pde("laplace", "sin(pi x)", "", "1", "1", "top", "", "")
+    m = method(r, "separation")
+    assert m["verified"] is True and r["surface"] is True and r["initial_expr"] is None
+    u = _pde_fn(m["plot"]["particular_expr"])
+    for xv, yv in ((0.3, 0.4), (0.5, 0.9), (0.8, 0.1)):
+        exact = math.sinh(math.pi * yv) / math.sinh(math.pi) * math.sin(math.pi * xv)
+        assert abs(u(xv, yv) - exact) < 1e-9
+    assert r["domain"]["y_max"] == 1.0 and r["domain"]["x_max"] == 1.0
+
+
+@pytest.mark.parametrize("f,a,b,side", [
+    ("x(2-x)", "2", "1", "bottom"), ("y(1-y)", "1", "1", "left"),
+    ("1", "1", "3", "right"), ("x", "1", "2", "top"), ("sin(pi y)", "30", "1", "right"),
+])
+def test_laplace_harmonic_and_bounded(f, a, b, side):
+    r = _pde("laplace", f, "", a, b, side, "", "")
+    m = method(r, "separation")
+    assert m["verified"] is True, m["verify_note"]
+    u = _pde_fn(m["plot"]["particular_expr"])
+    af, bf = float(a), float(b)
+    h = min(af, bf) * 1e-3
+    xv, yv = 0.37 * af, 0.58 * bf
+    mean = (u(xv + h, yv) + u(xv - h, yv) + u(xv, yv + h) + u(xv, yv - h)) / 4
+    scale = r["domain"]["u_max"] - r["domain"]["u_min"]
+    assert abs(mean - u(xv, yv)) < 1e-5 * scale                      # mean-value property
+    data = sp.lambdify(sp.Symbol("v"), sp.sympify(f.replace("^", "**").replace("(2-x)", "*(2-x)")
+                                                  .replace("(1-y)", "*(1-y)").replace("pi y", "pi*y")
+                                                  .replace("x", "v").replace("y", "v")), "math")
+    span = af if side in ("top", "bottom") else bf
+    values = [data(span * i / 50) for i in range(51)] + [0.0]
+    inside = [u(af * i / 9, bf * j / 9) for i in range(1, 9) for j in range(1, 9)]
+    assert min(inside) > min(values) - 0.05 * scale and max(inside) < max(values) + 0.05 * scale   # maximum principle
+    assert all(math.isfinite(v) for v in inside)
+    # The three other sides are at 0.
+    zero = {"top": [(0.0, 0.5), (1.0, 0.5), (0.5, 0.0)], "bottom": [(0.0, 0.5), (1.0, 0.5), (0.5, 1.0)],
+            "left": [(0.5, 0.0), (0.5, 1.0), (1.0, 0.5)], "right": [(0.5, 0.0), (0.5, 1.0), (0.0, 0.5)]}[side]
+    assert max(abs(u(af * px, bf * py)) for px, py in zero) < 1e-6 * max(scale, 1.0)
+
+
+@pytest.mark.parametrize("args,fragment", [
+    (("heat", "", "", "1", "1", "00", "", ""), "initial temperature"),
+    (("heat", "x", "", "0", "1", "00", "", ""), "length L must be a positive"),
+    (("heat", "x", "", "1", "-1", "00", "", ""), "diffusivity k must be a positive"),
+    (("heat", "x", "", "", "1", "00", "", ""), "Enter the length L"),
+    (("heat", "q", "", "1", "1", "00", "", ""), "Unknown symbol"),
+    (("heat", "x", "", "1", "1", "tt", "1", ""), "both end temperatures"),
+    (("heat", "x", "", "1", "1", "zz", "", ""), "boundary conditions"),
+    (("heat", "delta(x-1)", "", "2", "1", "00", "", ""), "impulse"),
+    (("wave", "", "", "1", "1", "", "", ""), "initial displacement"),
+    (("wave", "x", "", "1", "0", "", "", ""), "wave speed c must be a positive"),
+    (("laplace", "x", "", "1", "1", "up", "", ""), "which side"),
+    (("laplace", "y", "", "1", "1", "top", "", ""), "Unknown symbol"),
+    (("foo", "x", "", "1", "1", "", "", ""), "heat, wave or Laplace"),
+])
+def test_pde_errors(args, fragment):
+    r = json.loads(pde(*args))
+    assert not r["ok"] and fragment in r["error"]
+
+
+def test_pde_preview_and_speed():
+    import time
+    assert json.loads(preview("x(1-x);sin(x)", "pde"))["latex"].startswith("f(x) = ")
+    assert json.loads(preview("y^2", "pdey"))["latex"] == "f(y) = y^{2}"
+    assert not json.loads(preview("y^2", "pde"))["ok"]
+    start = time.time()
+    _pde("heat", "x(1-x)", "", "1", "1", "00", "", "")
+    _pde("wave", "x(1-x)", "x", "1", "1", "", "", "")
+    _pde("laplace", "x(2-x)", "", "2", "1", "bottom", "", "")
+    assert time.time() - start < 6
+
+
 def test_export_fixtures():
     """Write sample outputs used by the Kotlin contract tests."""
     import os
@@ -1218,6 +1428,12 @@ def test_export_fixtures():
         fh.write(system("y + t", "-x", "1", "0"))
     with open(os.path.join(out, "system_three.json"), "w") as fh:
         fh.write(system("y", "-x", "1", "0", "-z", "2"))
+    with open(os.path.join(out, "pde_heat.json"), "w") as fh:
+        fh.write(pde("heat", "x(1-x)", "", "1", "1", "00", "", ""))
+    with open(os.path.join(out, "pde_wave.json"), "w") as fh:
+        fh.write(pde("wave", "sin(pi x)", "", "1", "2", "", "", ""))
+    with open(os.path.join(out, "pde_laplace.json"), "w") as fh:
+        fh.write(pde("laplace", "sin(pi x)", "", "1", "2", "top", "", ""))
     with open(os.path.join(out, "fourier.json"), "w") as fh:
         fh.write(fourier("x", "", "pi"))
     with open(os.path.join(out, "boundary.json"), "w") as fh:

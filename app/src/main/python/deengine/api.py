@@ -45,6 +45,17 @@ def eigen_problem(kind, L_text):
     return _guard(lambda: boundary_problems.eigen(kind, L_text))
 
 
+def pde(kind, f_text, g_text="", p1="", p2="", bc="", t1="", t2=""):
+    """Heat ("heat"), wave ("wave") or Laplace ("laplace") equation by separation of variables.
+
+    heat: f, -, L, k, bc in {00, nn, 0n, n0, tt}, T1, T2.  wave: f, g, L, c.
+    laplace: f, -, a, b, side in {top, bottom, left, right}.
+    """
+    from . import pdes as pde_module
+    return _guard(lambda: pde_module.solve(kind, f_text or "", g_text or "", p1 or "", p2 or "",
+                                           bc or "", t1 or "", t2 or ""))
+
+
 def preview(text, kind="ode"):
     """Render what the user has typed so far.
 
@@ -55,6 +66,10 @@ def preview(text, kind="ode"):
     try:
         if not text.strip():
             return json.dumps({"ok": True, "latex": "", "order": 1})
+        if kind in ("pde", "pdey"):
+            from . import pdes as pde_module
+            return json.dumps({"ok": True, "order": 0,
+                               "latex": pde_module.preview(text, "y" if kind == "pdey" else "x")})
         if kind == "fourier":
             return json.dumps({"ok": True, "order": 0, "latex": fourier_series.preview(text)})
         if kind == "system":

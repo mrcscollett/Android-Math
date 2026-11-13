@@ -57,6 +57,11 @@ fun ResultScreen(model: SolverViewModel) {
                             "fourier" -> "Fourier series"
                             "boundary" -> "Boundary value problem"
                             "eigen" -> "Eigenvalue problem"
+                            "pde" -> when (result.pde) {
+                                "wave" -> "Wave equation"
+                                "laplace" -> "Laplace's equation"
+                                else -> "Heat equation"
+                            }
                             else -> "Solution"
                         }
                     )
@@ -112,6 +117,8 @@ fun ResultScreen(model: SolverViewModel) {
                 )
             } else if (result.kind == "system") {
                 PhaseTab(model)
+            } else if (result.kind == "pde") {
+                PdeTab(model)
             } else {
                 GraphTab(model)
             }

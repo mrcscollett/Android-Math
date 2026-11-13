@@ -401,3 +401,69 @@ class HistoryTest {
         assertTrue(History.decode("").isEmpty())
     }
 }
+
+class PdeTest {
+    private fun fixture(name: String) = javaClass.getResource("/$name")!!.readText()
+
+    @Test fun parsesHeat() {
+        val r = EngineJson.solveResult(fixture("pde_heat.json"))
+        assertEquals("pde", r.kind)
+        assertEquals("heat", r.pde)
+        assertFalse(r.surface)
+        val d = r.domain!!
+        assertEquals(1.0, d.xMax, 0.0)
+        assertTrue(d.tMax > 0.0 && d.uMax > d.uMin)
+        val initial = Expr.parseOrNull(r.initialExpr)!!
+        assertEquals(0.25, initial.eval(0.5, 0.0, 0.0), 1e-12)
+        // y stands for time: at t = 0 the series reproduces f, later it has decayed.
+        val u = Expr.parseOrNull(r.applicableMethods.single().plot!!.particularExpr)!!
+        assertEquals(0.25, u.eval(0.5, 0.0, 0.0), 1e-3)
+        assertTrue(u.eval(0.5, d.tMax, 0.0) < 0.01)
+        assertEquals(0.0, u.eval(0.0, 0.1, 0.0), 1e-9)
+    }
+
+    @Test fun parsesWaveWithBothMethods() {
+        val r = EngineJson.solveResult(fixture("pde_wave.json"))
+        assertEquals("wave", r.pde)
+        assertEquals(listOf("separation", "dalembert"), r.applicableMethods.map { it.id })
+        for (m in r.applicableMethods) {
+            val u = Expr.parseOrNull(m.plot!!.particularExpr)!!
+            // u = cos(2 pi t) sin(pi x): half a period later the string is inverted.
+            assertEquals(kotlin.math.sin(PI * 0.3), u.eval(0.3, 0.0, 0.0), 1e-9)
+            assertEquals(-kotlin.math.sin(PI * 0.3), u.eval(0.3, 0.5, 0.0), 1e-9)
+        }
+    }
+
+    @Test fun parsesLaplaceAndBuildsHeatMap() {
+        val r = EngineJson.solveResult(fixture("pde_laplace.json"))
+        assertEquals("laplace", r.pde)
+        assertTrue(r.surface)
+        assertNull(r.initialExpr)
+        val d = r.domain!!
+        assertEquals(2.0, d.yMax, 0.0)
+        val u = Expr.parseOrNull(r.applicableMethods.single().plot!!.particularExpr)!!
+        val exact = kotlin.math.sinh(PI * 1.0) / kotlin.math.sinh(PI * 2.0) * kotlin.math.sin(PI * 0.5)
+        assertEquals(exact, u.eval(0.5, 1.0, 0.0), 1e-9)
+        val map = Plot.heatMap(u, d.xMin, d.xMax, d.yMin, d.yMax, 8, 16, d.uMin, d.uMax)
+        assertEquals(8 * 16, map.size)
+        assertTrue(map.all { it in 0f..1f })
+        // Hottest along the top edge (row 0), cold at the bottom.
+        assertTrue(map[3] > 0.8f)
+        assertTrue(map[15 * 8 + 3] < 0.05f)
+        assertTrue(map[3] > map[0])
+    }
+
+    @Test fun heatMapClampsAndFlagsUndefined() {
+        val plane = Expr.parseOrNull("x + y")!!
+        val map = Plot.heatMap(plane, 0.0, 2.0, 0.0, 2.0, 2, 2, 1.0, 3.0)
+        // Cell centres: top row y = 1.5, x = 0.5 and 1.5; bottom row y = 0.5.
+        assertEquals(0.5f, map[0], 1e-6f)
+        assertEquals(1.0f, map[1], 1e-6f)
+        assertEquals(0.0f, map[2], 1e-6f)
+        assertEquals(0.5f, map[3], 1e-6f)
+        val undefined = Plot.heatMap(Expr.parseOrNull("sqrt(x - 5)")!!, 0.0, 1.0, 0.0, 1.0, 2, 1, 0.0, 1.0)
+        assertTrue(undefined.all { it.isNaN() })
+        val flat = Plot.heatMap(Expr.parseOrNull("3")!!, 0.0, 1.0, 0.0, 1.0, 1, 1, 3.0, 3.0)
+        assertEquals(0f, flat[0], 0f)
+    }
+}
