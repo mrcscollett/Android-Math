@@ -22,6 +22,10 @@ What it covers so far:
 - **Laplace transforms**: forward and inverse transforms with the rules shown
   (shifting theorems, partial fractions, convolution), and step and impulse
   forcing in equations.
+- **Fourier series**: full series on (-L, L) and half-range sine and cosine
+  series, with the coefficient integrals and a graph of the partial sums.
+- **Boundary value problems**: two-point conditions on y or y' (one solution,
+  none, or infinitely many), and the eigenvalue problem y'' + lambda y = 0.
 - **Systems**: eigenvalue method and matrix exponential for linear 2x2 systems,
   linearization of nonlinear systems, and phase portraits.
 - **Numerical methods**: Euler, improved Euler, midpoint, RK4,

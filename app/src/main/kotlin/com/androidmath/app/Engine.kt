@@ -64,6 +64,22 @@ object Engine {
         context: Context, f: String, g: String, x0: String, y0: String,
     ): Pair<String, SolveResult> = call(context, "system", f, g, x0, y0)
 
+    /** Fourier series of f on (-L, L) and the half-range series on (0, L). */
+    suspend fun fourier(
+        context: Context, f: String, left: String, length: String,
+    ): Pair<String, SolveResult> = call(context, "fourier", f, left, length)
+
+    /** Boundary value problem; each kind is "y" or "dy". */
+    suspend fun boundary(
+        context: Context, text: String,
+        a: String, aKind: String, aValue: String,
+        b: String, bKind: String, bValue: String,
+    ): Pair<String, SolveResult> = call(context, "boundary", text, a, aKind, aValue, b, bKind, bValue)
+
+    /** y'' + lambda y = 0 on [0, L]; [kind] is dd, nn, dn or nd. */
+    suspend fun eigenProblem(context: Context, kind: String, length: String): Pair<String, SolveResult> =
+        call(context, "eigen_problem", kind, length)
+
     private suspend fun call(
         context: Context, function: String, vararg args: String,
     ): Pair<String, SolveResult> = withContext(dispatcher) {

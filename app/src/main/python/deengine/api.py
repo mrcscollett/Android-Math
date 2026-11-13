@@ -3,8 +3,8 @@ import json
 
 import sympy as sp
 
-from . import (first_order, higher_order, numeric as numeric_methods, second_order,
-               systems, transforms)
+from . import (boundary as boundary_problems, first_order, fourier as fourier_series,
+               higher_order, numeric as numeric_methods, second_order, systems, transforms)
 from .parsing import InputError, parse_equation, parse_number
 from .util import dydx, plot_expr, tex, tex_side
 
@@ -28,15 +28,34 @@ def system(f_text, g_text, x0_text="", y0_text=""):
     return _guard(lambda: systems.solve(f_text or "", g_text or "", x0_text or "", y0_text or ""))
 
 
+def fourier(f_text, left_text="", L_text=""):
+    """Fourier series of f on (-L, L), plus half-range sine and cosine series on (0, L)."""
+    return _guard(lambda: fourier_series.solve(f_text or "", left_text or "", L_text or ""))
+
+
+def boundary(text, a_text, a_kind, a_value, b_text, b_kind, b_value):
+    """Second-order boundary value problem; each condition is on "y" or "dy" at a point."""
+    return _guard(lambda: boundary_problems.solve(text or "", a_text, a_kind, a_value,
+                                                  b_text, b_kind, b_value))
+
+
+def eigen_problem(kind, L_text):
+    """y'' + lambda y = 0 on [0, L]; kind is dd, nn, dn or nd (d: y = 0, n: y' = 0)."""
+    return _guard(lambda: boundary_problems.eigen(kind, L_text))
+
+
 def preview(text, kind="ode"):
     """Render what the user has typed so far.
 
     kind is "ode" for an equation, "forward" for f(t), "inverse" for F(s),
-    "system" for a pair of right-hand sides written as "f;g".
+    "system" for a pair of right-hand sides written as "f;g",
+    "fourier" for f(x) and an optional left-half formula written as "f;left".
     """
     try:
         if not text.strip():
             return json.dumps({"ok": True, "latex": "", "order": 1})
+        if kind == "fourier":
+            return json.dumps({"ok": True, "order": 0, "latex": fourier_series.preview(text)})
         if kind == "system":
             return json.dumps({"ok": True, "order": 1, "latex": systems.preview(text)})
         if kind in ("forward", "inverse"):

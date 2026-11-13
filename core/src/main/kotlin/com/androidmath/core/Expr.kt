@@ -36,6 +36,8 @@ private val FUNCTIONS: Map<String, (Double) -> Double> = mapOf(
     "exp" to ::exp, "log" to ::ln, "sqrt" to ::sqrt, "Abs" to ::abs,
     // Unit step, used by solutions with switched forcing.
     "Heaviside" to { v -> if (v < 0) 0.0 else 1.0 },
+    // Used to write periodic extensions for Fourier series.
+    "floor" to { v -> kotlin.math.floor(v) },
 )
 
 private class Parser(private val src: String) {

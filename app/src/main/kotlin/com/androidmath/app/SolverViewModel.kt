@@ -24,6 +24,8 @@ enum class Mode(val title: String) {
     Numerical("Numerical methods"),
     Laplace("Laplace transforms"),
     Systems("System of two equations"),
+    Fourier("Fourier series"),
+    Boundary("Boundary value problems"),
 }
 
 class SolverViewModel(app: Application) : AndroidViewModel(app) {
@@ -95,9 +97,35 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
         get() = mode == Mode.SecondOrder ||
             (mode == Mode.FirstOrder && (previewOrder >= 2 || equation.text.contains("''")))
 
+    /** Boundary section: false solves a boundary value problem, true the eigenvalue problem. */
+    var eigenMode by mutableStateOf(false)
+        private set
+    /** Boundary value problem: the two points, whether each condition is on y', and the values. */
+    var pointA by mutableStateOf("")
+    var pointB by mutableStateOf("")
+    var slopeAtA by mutableStateOf(false)
+    var slopeAtB by mutableStateOf(false)
+    var valueA by mutableStateOf("")
+    var valueB by mutableStateOf("")
+    /** Eigenvalue problem: dd, nn, dn or nd (d: y = 0, n: y' = 0 at 0 and at L). */
+    var eigenKind by mutableStateOf("dd")
+    /** Which partial sum or eigenfunction the graph shows. */
+    var partialIndex by mutableStateOf(0)
+
+    /** True when the screen has a second expression field (y' of a system, left half of f). */
+    private val twoFields: Boolean
+        get() = mode == Mode.Systems || mode == Mode.Fourier
+
+    fun chooseEigen(value: Boolean) {
+        if (value == eigenMode) return
+        eigenMode = value
+        inputError = null
+    }
+
     private val previewKind: String
         get() = when {
             mode == Mode.Systems -> "system"
+            mode == Mode.Fourier -> "fourier"
             mode != Mode.Laplace -> "ode"
             inverse -> "inverse"
             else -> "forward"
@@ -119,6 +147,8 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
             equation2 = TextFieldValue("")
             activeField = 0
             x0 = ""; y0 = ""; yPrime0 = ""
+            pointA = ""; pointB = ""; valueA = ""; valueB = ""
+            slopeAtA = false; slopeAtB = false
             previewLatex = ""; previewError = null; previewOrder = 1; inputError = null
         }
         screen = Screen.Input
@@ -139,7 +169,7 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
     private fun refreshPreview() {
         inputError = null
         previewJob?.cancel()
-        val text = if (mode == Mode.Systems) equation.text + ";" + equation2.text else equation.text
+        val text = if (twoFields) equation.text + ";" + equation2.text else equation.text
         val blank = equation.text.isBlank() && equation2.text.isBlank()
         previewJob = viewModelScope.launch {
             delay(250)
@@ -160,7 +190,7 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Inserts text at the cursor of the active field (used by the math key row). */
     fun insert(piece: String) {
-        val second = mode == Mode.Systems && activeField == 1
+        val second = twoFields && activeField == 1
         val current = if (second) equation2 else equation
         val start = current.selection.min
         val end = current.selection.max
@@ -171,7 +201,11 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
 
     /** True when enough has been typed to press Solve. */
     val canSolve: Boolean
-        get() = equation.text.isNotBlank() && (mode != Mode.Systems || equation2.text.isNotBlank())
+        get() = when {
+            mode == Mode.Boundary && eigenMode -> x0.isNotBlank()
+            mode == Mode.Systems -> equation.text.isNotBlank() && equation2.text.isNotBlank()
+            else -> equation.text.isNotBlank()
+        }
 
     fun solve(openTab: Int = 0) {
         if (solving || !canSolve) return
@@ -184,6 +218,16 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
                 Engine.transform(getApplication(), equation.text, inverse)
             } else if (mode == Mode.Systems) {
                 Engine.system(getApplication(), equation.text, equation2.text, x0, y0)
+            } else if (mode == Mode.Fourier) {
+                Engine.fourier(getApplication(), equation.text, equation2.text, x0)
+            } else if (mode == Mode.Boundary && eigenMode) {
+                Engine.eigenProblem(getApplication(), eigenKind, x0)
+            } else if (mode == Mode.Boundary) {
+                Engine.boundary(
+                    getApplication(), equation.text,
+                    pointA, if (slopeAtA) "dy" else "y", valueA,
+                    pointB, if (slopeAtB) "dy" else "y", valueB,
+                )
             } else {
                 // y'(x0) only means something for a second-order equation.
                 val slope = if (isSecondOrder || equation.text.contains("d2y")) yPrime0 else ""
@@ -202,6 +246,7 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
             tappedPoints.clear()
             constant = 1f
             constant2 = 1f
+            partialIndex = 0
             viewResetKey++
             screen = Screen.Result
         }

@@ -23,6 +23,8 @@ data class SolveResult(
     /** For systems: the right-hand sides of x' and y' as plot expressions in x and y. */
     val field: VectorField? = null,
     val equilibria: List<Equilibrium> = emptyList(),
+    /** Half-length of the interval of interest (Fourier, boundary, eigenvalue problems). */
+    val span: Double? = null,
 ) {
     val applicableMethods: List<Method> get() = methods.filter { it.applicable }
 }
@@ -64,6 +66,8 @@ data class PlotExprs(
     @SerialName("y_expr") val yExpr: String? = null,
     /** Points computed by a numerical method, as [x, y] pairs. */
     val points: List<List<Double>> = emptyList(),
+    /** Curves to step through with a slider: Fourier partial sums or eigenfunctions. */
+    val partials: List<PartialSum> = emptyList(),
 ) {
     /** The points flattened to [x0, y0, x1, y1, ...]. */
     fun pointArray(): DoubleArray {
@@ -75,6 +79,10 @@ data class PlotExprs(
         return out
     }
 }
+
+/** One selectable curve: [n] terms of a Fourier series, or the n-th eigenfunction. */
+@Serializable
+data class PartialSum(val n: Int, val expr: String)
 
 @Serializable
 data class PreviewResult(

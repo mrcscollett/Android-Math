@@ -42,7 +42,9 @@ import com.androidmath.core.Viewport
  * the tapped point (only when [rhs] is known, i.e. for first-order
  * equations). [exact] is the closed-form solution, evaluated with the
  * constants [constant] and [constant2]. [points] are the steps of a
- * numerical method, drawn as a marked polyline.
+ * numerical method, drawn as a marked polyline. [overlay] is a second curve
+ * drawn over the first (a Fourier partial sum or an eigenfunction), and
+ * [halfWidth] sets how much of the x-axis the starting view shows.
  */
 @Composable
 fun GraphView(
@@ -56,6 +58,8 @@ fun GraphView(
     resetKey: Int,
     onTap: (Double, Double) -> Unit,
     modifier: Modifier = Modifier,
+    overlay: Expr? = null,
+    halfWidth: Double = 5.0,
 ) {
     var size by remember { mutableStateOf(IntSize.Zero) }
     var viewport by remember(resetKey) { mutableStateOf<Viewport?>(null) }
@@ -65,7 +69,7 @@ fun GraphView(
     val h = size.height.toFloat()
     val vp = viewport ?: if (w > 0 && h > 0) {
         val start = if (points != null && points.size >= 4) Viewport.fitting(points, w, h)
-        else Viewport.centred(ic?.x0 ?: 0.0, ic?.y0 ?: 0.0, 5.0, w, h)
+        else Viewport.centred(ic?.x0 ?: 0.0, ic?.y0 ?: 0.0, halfWidth, w, h)
         start.also { viewport = it }
     } else null
 
@@ -85,6 +89,11 @@ fun GraphView(
                 { x -> exact.eval(x, 0.0, constant, constant2) },
                 vp, w, h, (w / 2).toInt().coerceIn(200, 1200),
             )
+        } else emptyList()
+    }
+    val overlayLines = remember(overlay, vp, size) {
+        if (overlay != null && vp != null) {
+            Plot.curve({ x -> overlay.eval(x, 0.0, 0.0) }, vp, w, h, (w / 2).toInt().coerceIn(200, 1200))
         } else emptyList()
     }
     val pointLines = remember(points, vp, size) {
@@ -147,6 +156,7 @@ fun GraphView(
 
         drawPolylines(numericLines, colors.tertiary, 2.dp.toPx())
         drawPolylines(exactLines, colors.primary, 3.dp.toPx())
+        drawPolylines(overlayLines, colors.tertiary, 2.5.dp.toPx())
         drawPolylines(pointLines, colors.tertiary, 2.dp.toPx())
         if (points != null && points.size <= 2 * 80) {
             // Few enough steps to mark each computed point.

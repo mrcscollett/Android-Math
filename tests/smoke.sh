@@ -124,4 +124,17 @@ open third "d3y/dx3-6*d2y/dx2+11*dy/dx-6*y=0" 0 1 0 'text="Steps"' "--es mode se
 expect third 'text="Characteristic equation"'
 expect third 'Solve for the roots'
 
+open fourier "x" pi "" 0 'text="Steps"' "--es mode fourier"
+expect fourier 'text="Fourier series"'
+expect fourier 'Compute the coefficients'
+
+open bvp "d2y/dx2+y=0" "" "" 0 'text="Steps"' "--es mode boundary --es a 0 --es va 0 --es b pi/2 --es vb 1"
+expect bvp 'text="Boundary value problem"'
+expect bvp 'Impose the boundary conditions'
+
+# The eigenvalue problem has no equation field; the equation extra only triggers the launch.
+open eigen "0" pi "" 1 'text="Graph"' "--es mode eigen --es bc dd"
+expect eigen 'text="Eigenvalue problem"'
+expect eigen 'Eigenfunction 1'
+
 exit $fail

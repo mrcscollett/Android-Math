@@ -49,12 +49,23 @@ class MainActivity : ComponentActivity() {
                 "numeric" -> Mode.Numerical
                 "laplace", "inverse" -> Mode.Laplace
                 "system" -> Mode.Systems
+                "fourier" -> Mode.Fourier
+                "boundary", "eigen" -> Mode.Boundary
                 else -> Mode.FirstOrder
             }
         )
         model.chooseInverse(intent.getStringExtra("mode") == "inverse")
         model.setEquationText(equation)
         intent.getStringExtra("equation2")?.let { model.setEquation2Text(it) }
+        model.chooseEigen(intent.getStringExtra("mode") == "eigen")
+        // Boundary section: "a", "va", "b", "vb", "ka"/"kb" ("dy" for a slope condition), "bc".
+        model.pointA = intent.getStringExtra("a") ?: ""
+        model.valueA = intent.getStringExtra("va") ?: ""
+        model.slopeAtA = intent.getStringExtra("ka") == "dy"
+        model.pointB = intent.getStringExtra("b") ?: ""
+        model.valueB = intent.getStringExtra("vb") ?: ""
+        model.slopeAtB = intent.getStringExtra("kb") == "dy"
+        intent.getStringExtra("bc")?.let { model.eigenKind = it }
         model.x0 = intent.getStringExtra("x0") ?: ""
         model.y0 = intent.getStringExtra("y0") ?: ""
         model.yPrime0 = intent.getStringExtra("yp0") ?: ""

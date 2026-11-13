@@ -79,6 +79,42 @@ private data class Example(
     val second: String = "",
 )
 
+private val KEYS_FOURIER = listOf(
+    "x", "^", "(", ")", "*", "/", "+", "-", "e^(", "sin(", "cos(", "sqrt(", "pi",
+)
+
+/** Fourier examples: [Example.equation] is f on (0, L), [Example.second] f on (-L, 0), [Example.x0] is L. */
+private val FOURIER_EXAMPLES = listOf(
+    Example("x", x0 = "pi"),
+    Example("1", x0 = "pi", second = "-1"),
+    Example("x^2", x0 = "1"),
+    Example("x(1-x)", x0 = "1"),
+    Example("e^x", x0 = "1"),
+)
+
+/** A boundary value problem: the equation and a condition (on y, or on y' when the flag is set) at two points. */
+private data class BoundaryExample(
+    val equation: String,
+    val a: String, val slopeAtA: Boolean, val valueA: String,
+    val b: String, val slopeAtB: Boolean, val valueB: String,
+)
+
+private val BOUNDARY_EXAMPLES = listOf(
+    BoundaryExample("y'' + y = 0", "0", false, "0", "pi/2", false, "1"),
+    BoundaryExample("y'' + y = 0", "0", false, "0", "pi", false, "0"),
+    BoundaryExample("y'' + y = 0", "0", false, "0", "pi", false, "1"),
+    BoundaryExample("y'' - y = x", "0", false, "0", "1", true, "0"),
+    BoundaryExample("x^2 y'' - 2y = x", "1", false, "0", "2", false, "1"),
+)
+
+/** Condition pairs for y'' + \u03bby = 0: d means y = 0, n means y' = 0, at 0 and then at L. */
+private val EIGEN_KINDS = listOf(
+    "dd" to "y(0) = 0,  y(L) = 0",
+    "nn" to "y'(0) = 0,  y'(L) = 0",
+    "dn" to "y(0) = 0,  y'(L) = 0",
+    "nd" to "y'(0) = 0,  y(L) = 0",
+)
+
 private val KEYS_XY = listOf(
     "x", "y", "^", "(", ")", "*", "/", "+", "-", "sin(", "cos(", "e^(", "sqrt(", "pi",
 )
@@ -149,6 +185,24 @@ fun InputScreen(model: SolverViewModel) {
         ) {
             val laplace = model.mode == Mode.Laplace
             val system = model.mode == Mode.Systems
+            val fourier = model.mode == Mode.Fourier
+            val boundary = model.mode == Mode.Boundary
+            // The eigenvalue problem has a fixed equation, so its screen has no equation field.
+            val eigen = boundary && model.eigenMode
+            if (boundary) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = !model.eigenMode,
+                        onClick = { model.chooseEigen(false) },
+                        label = { Text("Boundary value problem") },
+                    )
+                    FilterChip(
+                        selected = model.eigenMode,
+                        onClick = { model.chooseEigen(true) },
+                        label = { Text("Eigenvalue problem y'' + \u03bby = 0") },
+                    )
+                }
+            }
             if (laplace) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(
@@ -163,6 +217,7 @@ fun InputScreen(model: SolverViewModel) {
                     )
                 }
             }
+            if (!eigen) {
             OutlinedTextField(
                 value = model.equation,
                 onValueChange = model::onEquationChange,
@@ -170,6 +225,7 @@ fun InputScreen(model: SolverViewModel) {
                 label = {
                     Text(
                         when {
+                            fourier -> "f(x) on (0, L)"
                             system -> "x' ="
                             !laplace -> "Equation"
                             model.inverse -> "F(s)"
@@ -180,6 +236,7 @@ fun InputScreen(model: SolverViewModel) {
                 placeholder = {
                     Text(
                         when {
+                            fourier -> "x"
                             system -> "x + 2y"
                             laplace && model.inverse -> "1/(s(s+1))"
                             laplace -> "e^(2t) sin(3t)"
@@ -199,8 +256,9 @@ fun InputScreen(model: SolverViewModel) {
                 ),
                 keyboardActions = KeyboardActions(onDone = { submit() }),
             )
+            }
 
-            if (system) {
+            if (system || fourier) {
                 OutlinedTextField(
                     value = model.equation2,
                     onValueChange = model::onEquation2Change,
@@ -208,8 +266,8 @@ fun InputScreen(model: SolverViewModel) {
                         .fillMaxWidth()
                         .padding(top = 8.dp)
                         .onFocusChanged { if (it.isFocused) model.activeField = 1 },
-                    label = { Text("y' =") },
-                    placeholder = { Text("3x + 2y") },
+                    label = { Text(if (fourier) "f(x) on (\u2212L, 0)  (optional)" else "y' =") },
+                    placeholder = { Text(if (fourier) "same formula if left empty" else "3x + 2y") },
                     singleLine = true,
                     textStyle = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Monospace),
                     isError = model.previewError != null || model.inputError != null,
@@ -229,6 +287,8 @@ fun InputScreen(model: SolverViewModel) {
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 val keys = when {
+                    eigen -> emptyList()
+                    fourier -> KEYS_FOURIER
                     system -> KEYS_XY
                     !laplace -> KEYS
                     model.inverse -> KEYS_S
@@ -243,6 +303,7 @@ fun InputScreen(model: SolverViewModel) {
                 }
             }
 
+            if (!eigen) {
             OutlinedCard(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
                 Box(Modifier.fillMaxWidth().height(64.dp), contentAlignment = Alignment.Center) {
                     // The web view stays in place; an error is drawn over it rather
@@ -252,6 +313,7 @@ fun InputScreen(model: SolverViewModel) {
                         error != null -> ""
                         model.engineReady -> if (laplace) "Your expression appears here as you type"
                         else if (system) "Your system appears here as you type"
+                        else if (fourier) "Your function appears here as you type"
                         else "Your equation appears here as you type"
                         else -> "Starting the solver\u2026"
                     }
@@ -269,8 +331,9 @@ fun InputScreen(model: SolverViewModel) {
                     }
                 }
             }
+            }
 
-            if (!laplace) {
+            if (!laplace && !fourier && !boundary) {
                 val numerical = model.mode == Mode.Numerical
                 val second = model.isSecondOrder
                 Text(
@@ -310,6 +373,45 @@ fun InputScreen(model: SolverViewModel) {
                     }
                 }
             }
+            if (fourier || eigen) {
+                Text(
+                    if (fourier) "Half-length L of the interval" else "Length L of the interval [0, L]",
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
+                )
+                NumberField(model.x0, { model.x0 = it }, "L")
+            }
+            if (eigen) {
+                Text(
+                    "Boundary conditions",
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
+                )
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for ((kind, label) in EIGEN_KINDS) {
+                        FilterChip(
+                            selected = model.eigenKind == kind,
+                            onClick = { model.eigenKind = kind },
+                            label = { Text(label) },
+                        )
+                    }
+                }
+            }
+            if (boundary && !eigen) {
+                Text(
+                    "Boundary conditions",
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
+                )
+                ConditionRow(
+                    model.pointA, { model.pointA = it }, model.slopeAtA, { model.slopeAtA = it },
+                    model.valueA, { model.valueA = it },
+                )
+                ConditionRow(
+                    model.pointB, { model.pointB = it }, model.slopeAtB, { model.slopeAtB = it },
+                    model.valueB, { model.valueB = it },
+                )
+            }
 
             model.inputError?.let {
                 Text(
@@ -334,6 +436,8 @@ fun InputScreen(model: SolverViewModel) {
                         when (model.mode) {
                             Mode.Numerical -> "Compute step by step"
                             Mode.Laplace -> "Transform step by step"
+                            Mode.Fourier -> "Find the series"
+                            Mode.Boundary -> if (model.eigenMode) "Find the eigenvalues" else "Solve step by step"
                             else -> "Solve step by step"
                         }
                     )
@@ -355,12 +459,36 @@ fun InputScreen(model: SolverViewModel) {
                     Mode.Numerical -> NUMERICAL_EXAMPLES
                     Mode.Laplace -> if (model.inverse) INVERSE_EXAMPLES else FORWARD_EXAMPLES
                     Mode.Systems -> SYSTEM_EXAMPLES
+                    Mode.Fourier -> FOURIER_EXAMPLES
+                    Mode.Boundary -> emptyList()
+                }
+                if (boundary && !eigen) {
+                    for (example in BOUNDARY_EXAMPLES) {
+                        AssistChip(
+                            onClick = {
+                                model.setEquationText(example.equation)
+                                model.pointA = example.a
+                                model.slopeAtA = example.slopeAtA
+                                model.valueA = example.valueA
+                                model.pointB = example.b
+                                model.slopeAtB = example.slopeAtB
+                                model.valueB = example.valueB
+                            },
+                            label = {
+                                Text(
+                                    "${example.equation},  " +
+                                        "${if (example.slopeAtA) "y'" else "y"}(${example.a}) = ${example.valueA},  " +
+                                        "${if (example.slopeAtB) "y'" else "y"}(${example.b}) = ${example.valueB}"
+                                )
+                            },
+                        )
+                    }
                 }
                 for (example in examples) {
                     AssistChip(
                         onClick = {
                             model.setEquationText(example.equation)
-                            if (system) model.setEquation2Text(example.second)
+                            if (system || fourier) model.setEquation2Text(example.second)
                             model.x0 = example.x0
                             model.y0 = example.y0
                             model.yPrime0 = example.slope
@@ -368,6 +496,10 @@ fun InputScreen(model: SolverViewModel) {
                         label = {
                             Text(
                                 when {
+                                    fourier && example.second.isNotEmpty() ->
+                                        "f = ${example.equation} for x > 0, ${example.second} for x < 0,  " +
+                                            "L = ${example.x0}"
+                                    fourier -> "f = ${example.equation},  L = ${example.x0}"
                                     system && example.x0.isEmpty() ->
                                         "x' = ${example.equation},  y' = ${example.second}"
                                     system -> "x' = ${example.equation},  y' = ${example.second},  " +
@@ -387,7 +519,17 @@ fun InputScreen(model: SolverViewModel) {
                 }
             }
             Text(
-                if (system) {
+                if (fourier) {
+                    "The full series represents f on (\u2212L, L); the sine and cosine series " +
+                        "represent a function given on (0, L) only. For a function with two " +
+                        "formulas, fill in the second field."
+                } else if (eigen) {
+                    "These are the problems that separation of variables produces for the heat " +
+                        "and wave equations."
+                } else if (boundary) {
+                    "Give y or y' at two different points. Unlike an initial value problem, " +
+                        "there may be one solution, none, or infinitely many."
+                } else if (system) {
                     "Enter the right-hand sides in terms of x and y. Linear systems are solved " +
                         "exactly; nonlinear ones are analysed near their equilibrium points."
                 } else if (laplace) {
@@ -421,4 +563,22 @@ private fun NumberField(value: String, onChange: (String) -> Unit, label: String
             imeAction = ImeAction.Next,
         ),
     )
+}
+
+/** One boundary condition: the point, whether it fixes y or y', and the value. */
+@Composable
+private fun ConditionRow(
+    point: String, onPoint: (String) -> Unit,
+    slope: Boolean, onSlope: (Boolean) -> Unit,
+    value: String, onValue: (String) -> Unit,
+) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.padding(bottom = 4.dp),
+    ) {
+        NumberField(point, onPoint, "at x =")
+        FilterChip(selected = !slope, onClick = { onSlope(false) }, label = { Text("y") })
+        FilterChip(selected = slope, onClick = { onSlope(true) }, label = { Text("y'") })
+        NumberField(value, onValue, "value")
+    }
 }

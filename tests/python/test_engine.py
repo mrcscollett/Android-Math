@@ -851,6 +851,239 @@ def test_phase_line():
     assert "stays there" in method(run("y' = y(1-y)", "0", "1"), "phase_line")["steps"][-1]["text"]
 
 
+# ---- group 2: Fourier series ----------------------------------------------
+
+from deengine import boundary, eigen_problem, fourier
+
+
+def _fx(text):
+    return sp.lambdify(X, sp.sympify(text.replace("^", "**"), locals={"x": X, "e": sp.E}), "mpmath")
+
+
+def _quad_coefficient(pieces, L, k, kind):
+    """(1/L) * sum over pieces of the integral of f(x) cos or sin(k pi x / L)."""
+    trig = mpmath.cos if kind == "a" else mpmath.sin
+    return sum(mpmath.quad(lambda t: f(t) * trig(k * mpmath.pi * t / L), [lo, hi])
+               for f, lo, hi in pieces) / L
+
+
+def _partial_coefficients(expr_text):
+    """{('a', 0): value, ('a', k): ..., ('b', k): ...} read from a partial-sum plot string."""
+    out = {}
+    for term in expr_text.split(" + "):
+        if "*" not in term:
+            out[("a", 0)] = 2 * float(term)       # the constant term is a_0 / 2
+            continue
+        coef, rest = term.split("*", 1)
+        kind = "a" if rest.startswith("cos") else "b"
+        out[(kind, float(rest[4:rest.index("*x")]))] = float(coef)
+    return out
+
+
+# (f on (0, L), f on (-L, 0) or "", L text, L value)
+FOURIER = [
+    ("x", "", "pi", math.pi),
+    ("x^2", "", "1", 1.0),
+    ("1", "", "2", 2.0),
+    ("1", "-1", "pi", math.pi),          # square wave
+    ("x(1-x)", "", "1", 1.0),
+    ("e^x", "", "1", 1.0),
+    ("x", "0", "pi", math.pi),           # half-wave ramp
+]
+
+
+@pytest.mark.parametrize("text,left,L_text,L", FOURIER)
+def test_fourier_coefficients_match_quadrature(text, left, L_text, L):
+    r = json.loads(fourier(text, left, L_text))
+    assert r["ok"], r.get("error")
+    assert r["kind"] == "fourier" and [m["id"] for m in r["methods"]] == ["full", "sine", "cosine"]
+    f = _fx(text.replace("x(1-x)", "x*(1-x)"))
+    g = _fx(left) if left else f
+    setups = {"full": ([(g, -L, 0), (f, 0, L)], True, True, 1.0),
+              "sine": ([(f, 0, L)], False, True, 2.0),
+              "cosine": ([(f, 0, L)], True, False, 2.0)}
+    for m in r["methods"]:
+        if left and m["id"] != "full":
+            assert not m["applicable"] and "left half" in m["reason"]
+            continue
+        assert m["applicable"] and m["verified"] is True, (m["id"], m.get("verify_note"))
+        pieces, want_a, want_b, scale = setups[m["id"]]
+        partials = m["plot"]["partials"]
+        assert [p["n"] for p in partials] == [1, 2, 3, 5, 10, 20]
+        got = _partial_coefficients(partials[3]["expr"])        # harmonics 1..5
+        w = math.pi / L
+        for k in range(0, 6):
+            for kind, wanted in (("a", want_a), ("b", want_b)):
+                if kind == "b" and k == 0:
+                    continue
+                reference = float(scale * _quad_coefficient(pieces, L, k, kind)) if wanted else 0.0
+                key = (kind, 0) if k == 0 else (kind, round(k * w, 12))
+                value = got.get(key, 0.0)
+                assert abs(value - reference) < 1e-8, (m["id"], kind, k, value, reference)
+
+
+def test_fourier_partial_sums_approach_the_function():
+    r = json.loads(fourier("x(1-x)", "", "1"))
+    sine = method(r, "sine")
+    errors = []
+    for p in sine["plot"]["partials"]:
+        s = sp.lambdify(X, sp.sympify(p["expr"], locals={"x": X}), "math")
+        errors.append(max(abs(s(t) - t * (1 - t)) for t in (0.1, 0.3, 0.5, 0.8)))
+    assert errors[0] > errors[2] > errors[-1] and errors[-1] < 1e-4
+    # The periodic extension agrees with f on the base interval and is odd.
+    ext = sp.sympify(sine["plot"]["particular_expr"], locals={"x": X})
+    assert abs(float(ext.subs(X, 0.3)) - 0.21) < 1e-12
+    assert abs(float(ext.subs(X, -0.3)) + 0.21) < 1e-12
+    assert abs(float(ext.subs(X, 2.3)) - 0.21) < 1e-12
+    cosine_ext = sp.sympify(method(r, "cosine")["plot"]["particular_expr"], locals={"x": X})
+    assert abs(float(cosine_ext.subs(X, -0.3)) - 0.21) < 1e-12
+
+
+def test_fourier_symmetry_cases_and_text():
+    odd = method(json.loads(fourier("x", "", "pi")), "full")
+    text = " ".join(s["text"] for s in odd["steps"])
+    assert "is odd" in text and "average of the left and right limits" in text
+    assert "2 \\sin{\\left(x \\right)} - \\sin{\\left(2 x \\right)}" in odd["particular_latex"]
+    even = method(json.loads(fourier("x^2", "", "1")), "full")
+    assert "is even" in " ".join(s["text"] for s in even["steps"])
+    square = method(json.loads(fourier("1", "-1", "pi")), "full")
+    lines = " ".join(l for s in square["steps"] for l in s["latex"])
+    assert "(n\\ \\text{even})" in lines and "(n\\ \\text{odd})" in lines
+    assert "\\frac{4 \\sin{\\left(x \\right)}}{\\pi}" in square["particular_latex"]
+    assert json.loads(fourier("1", "", "2"))["methods"][0]["particular_latex"] == "f(x) \\sim 1"
+
+
+def test_fourier_errors_and_preview():
+    assert "half-length L" in json.loads(fourier("x", "", ""))["error"]
+    assert "positive" in json.loads(fourier("x", "", "0"))["error"]
+    assert "positive" in json.loads(fourier("x", "", "-2"))["error"]
+    assert "Unknown symbol 'q'" in json.loads(fourier("q", "", "1"))["error"]
+    assert "Enter the function" in json.loads(fourier("", "", "1"))["error"]
+    assert json.loads(preview("x;-x", "fourier"))["latex"] == "f(x) = x,\\qquad f(x)\\ (x<0) = - x"
+    assert not json.loads(preview("x;q", "fourier"))["ok"]
+
+
+# ---- group 2: boundary value and eigenvalue problems ----------------------
+
+def _shoot(text, a, da, alpha, b, db, beta):
+    """Solve the linear BVP by shooting: two RK4 runs from a, combined linearly."""
+    from deengine.parsing import parse_equation
+    from deengine.second_order import analyse
+    prob, lhs, rhs = parse_equation(text)
+    eq = analyse(prob, lhs, rhs)
+    acc = sp.lambdify((prob.x, prob.y, prob.yp), (eq.g - eq.b * prob.yp - eq.c * prob.y) / eq.a, "math")
+
+    def run(y, v, stop):
+        t, h = a, (stop - a) / 4000
+        for _ in range(4000):
+            def d(tt, s):
+                return [s[1], acc(tt, s[0], s[1])]
+            st = [y, v]
+            k1 = d(t, st)
+            k2 = d(t + h / 2, [p + h / 2 * q for p, q in zip(st, k1)])
+            k3 = d(t + h / 2, [p + h / 2 * q for p, q in zip(st, k2)])
+            k4 = d(t + h, [p + h * q for p, q in zip(st, k3)])
+            y, v = [p + h / 6 * (q1 + 2 * q2 + 2 * q3 + q4) for p, q1, q2, q3, q4 in zip(st, k1, k2, k3, k4)]
+            t += h
+        return y, v
+
+    # Start values meeting the condition at a, with the other quantity 0 or 1.
+    starts = [(0.0, alpha), (1.0, alpha)] if da else [(alpha, 0.0), (alpha, 1.0)]
+
+    def end(start, stop):
+        y, v = run(start[0], start[1], stop)
+        return v if db else y
+
+    e0, e1 = end(starts[0], b), end(starts[1], b)
+    weight = (beta - e0) / (e1 - e0)
+    start = (starts[0][0] + weight * (starts[1][0] - starts[0][0]),
+             starts[0][1] + weight * (starts[1][1] - starts[0][1]))
+    mid = a + 0.6 * (b - a)
+    return mid, run(start[0], start[1], mid)[0]
+
+
+# (equation, a, kind, alpha, b, kind, beta)
+BVPS = [
+    ("y'' + y = 0", "0", "y", "0", "1", "y", "1"),
+    ("y'' - y = x", "0", "y", "0", "1", "dy", "0"),
+    ("y'' = 6x", "0", "dy", "1", "1", "y", "0"),
+    ("y'' + 3y' + 2y = e^x", "0", "y", "1", "1", "y", "0"),
+    ("x^2 y'' + x y' - y = 0", "1", "y", "1", "2", "y", "2"),
+    ("y'' + 4y = 0", "0", "dy", "1", "1", "dy", "-1"),
+    ("x^2 y'' - 2y = x", "1", "y", "0", "2", "y", "1"),
+]
+
+
+@pytest.mark.parametrize("text,a,ka,va,b,kb,vb", BVPS)
+def test_boundary_value_problem_matches_shooting(text, a, ka, va, b, kb, vb):
+    r = json.loads(boundary(text, a, ka, va, b, kb, vb))
+    assert r["ok"], r.get("error")
+    assert r["kind"] == "boundary" and "exactly one solution" in r["summary"]
+    m = r["methods"][0]
+    assert m["verified"] is True and m["steps"][-1]["title"] == "Check"
+    expr = sp.sympify(m["plot"]["particular_expr"], locals={"x": X})
+    mid, reference = _shoot(text, float(a), ka == "dy", float(va), float(b), kb == "dy", float(vb))
+    assert abs(float(expr.subs(X, mid)) - reference) < 1e-6 * (1 + abs(reference))
+
+
+def test_boundary_solvability_outcomes():
+    one = json.loads(boundary("y'' + y = 0", "0", "y", "0", "pi/2", "y", "1"))
+    assert one["methods"][0]["plot"]["particular_expr"] == "sin(x)"
+    many = json.loads(boundary("y'' + y = 0", "0", "y", "0", "pi", "y", "0"))
+    assert "infinitely many" in many["summary"]
+    assert many["methods"][0]["plot"]["general_expr"] == "C*sin(x)"
+    assert many["methods"][0]["particular_latex"] is None
+    none = json.loads(boundary("y'' + y = 0", "0", "y", "0", "pi", "y", "1"))
+    assert "no solution" in none["summary"]
+    m = none["methods"][0]
+    assert m["plot"]["particular_expr"] is None and m["plot"]["general_expr"] is None
+    assert m["steps"][-1]["title"] == "Result" and "No solution" in [s["title"] for s in m["steps"]]
+
+
+def test_boundary_errors():
+    assert "second-order" in json.loads(boundary("y' = y", "0", "y", "0", "1", "y", "0"))["error"]
+    assert "must be different" in json.loads(boundary("y'' + y = 0", "0", "y", "0", "0", "y", "1"))["error"]
+    assert "missing" in json.loads(boundary("y'' + y = 0", "0", "y", "", "1", "y", "1"))["error"]
+    assert "closed form" in json.loads(boundary("y'' + sin(x) y = 0", "0", "y", "0", "1", "y", "1"))["error"]
+    assert "not defined" in json.loads(boundary("x^2 y'' + x y' - y = 0", "0", "y", "0", "1", "y", "1"))["error"]
+    assert "condition on y" in json.loads(boundary("y'' + y = 0", "0", "z", "0", "1", "y", "1"))["error"]
+
+
+@pytest.mark.parametrize("kind,L_text,L", [("dd", "pi", math.pi), ("nn", "2", 2.0),
+                                          ("dn", "1", 1.0), ("nd", "3", 3.0)])
+def test_eigenvalue_problem(kind, L_text, L):
+    r = json.loads(eigen_problem(kind, L_text))
+    assert r["ok"] and r["kind"] == "eigen"
+    m = r["methods"][0]
+    assert m["verified"] is True
+    titles = [s["title"] for s in m["steps"]]
+    assert titles[1:4] == ["Case λ < 0", "Case λ = 0", "Case λ > 0"]
+    table = next(s for s in m["steps"] if "table" in s)["table"]
+    assert len(table["rows"]) == 5 and len(m["plot"]["partials"]) == 5
+    start_value, end_value = kind[0] == "d", kind[1] == "d"
+    for p in m["plot"]["partials"]:
+        k = p["n"]
+        fn = sp.sympify(p["expr"], locals={"x": X})
+        if kind in ("dd", "nn"):
+            lam = (k * math.pi / L) ** 2
+        else:
+            lam = ((2 * k - 1) * math.pi / (2 * L)) ** 2
+        # Each eigenfunction satisfies the equation and both conditions.
+        assert abs(float((fn.diff(X, 2) + lam * fn).subs(X, 0.37 * L))) < 1e-9
+        assert abs(float((fn if start_value else fn.diff(X)).subs(X, 0))) < 1e-12
+        assert abs(float((fn if end_value else fn.diff(X)).subs(X, L))) < 1e-9
+    assert (m["plot"]["partials"][0]["n"] == 0) == (kind == "nn")
+    # Orthogonality of the first two.
+    f0, f1 = (sp.lambdify(X, sp.sympify(p["expr"], locals={"x": X}), "mpmath") for p in m["plot"]["partials"][:2])
+    assert abs(mpmath.quad(lambda t: f0(t) * f1(t), [0, L])) < 1e-10
+
+
+def test_eigenvalue_problem_errors():
+    assert "four pairs" in json.loads(eigen_problem("xx", "1"))["error"]
+    assert "length L" in json.loads(eigen_problem("dd", ""))["error"]
+    assert "positive" in json.loads(eigen_problem("dd", "-1"))["error"]
+
+
 def test_export_fixtures():
     """Write sample outputs used by the Kotlin contract tests."""
     import os
@@ -875,3 +1108,9 @@ def test_export_fixtures():
         fh.write(system("-x - 2y", "2x - y", "1", "1"))
     with open(os.path.join(out, "system_nonlinear.json"), "w") as fh:
         fh.write(system("x(1 - y)", "y(x - 1)"))
+    with open(os.path.join(out, "fourier.json"), "w") as fh:
+        fh.write(fourier("x", "", "pi"))
+    with open(os.path.join(out, "boundary.json"), "w") as fh:
+        fh.write(boundary("y'' + y = 0", "0", "y", "0", "pi/2", "y", "1"))
+    with open(os.path.join(out, "eigen.json"), "w") as fh:
+        fh.write(eigen_problem("dd", "pi"))

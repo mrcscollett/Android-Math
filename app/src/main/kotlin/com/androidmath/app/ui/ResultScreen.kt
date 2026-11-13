@@ -54,6 +54,9 @@ fun ResultScreen(model: SolverViewModel) {
                         when (result.kind) {
                             "numeric" -> "Approximation"
                             "transform" -> "Transform"
+                            "fourier" -> "Fourier series"
+                            "boundary" -> "Boundary value problem"
+                            "eigen" -> "Eigenvalue problem"
                             else -> "Solution"
                         }
                     )
@@ -72,6 +75,7 @@ fun ResultScreen(model: SolverViewModel) {
                         when (result.kind) {
                             "numeric" -> "Compare ${methods.size} methods"
                             "transform" -> "${methods.size} ways to find this"
+                            "fourier" -> "${methods.size} series for this function"
                             else -> "${methods.size} ways to solve this"
                         },
                         style = MaterialTheme.typography.labelLarge,
@@ -134,12 +138,22 @@ private fun GraphTab(model: SolverViewModel) {
     val showC1 = family && Regex("""\bC\b""").containsMatchIn(generalText)
     val showC2 = family && generalText.contains("C2")
     val canTap = rhs != null
+    // Fourier partial sums or eigenfunctions to step through with a slider.
+    val partials = method?.plot?.partials.orEmpty()
+    val partialIndex = model.partialIndex.coerceIn(0, (partials.size - 1).coerceAtLeast(0))
+    val overlay = remember(method, partialIndex) {
+        Expr.parseOrNull(partials.getOrNull(partialIndex)?.expr)
+    }
+    val wide = result.kind == "fourier" || result.kind == "eigen" || result.kind == "boundary"
+    val halfWidth = if (wide) ((result.span ?: 2.5) * 2).coerceIn(1.0, 100.0) else 5.0
 
     Column(Modifier.fillMaxSize()) {
         Box(Modifier.weight(1f).fillMaxWidth()) {
-            if (rhs == null && exact == null && points == null) {
+            if (rhs == null && exact == null && points == null && overlay == null) {
                 Text(
-                    if (result.kind == "transform") {
+                    if (result.kind == "boundary") {
+                        "This boundary value problem has no solution, so there is nothing to graph."
+                    } else if (result.kind == "transform") {
                         "This function cannot be graphed (it contains an impulse or a " +
                             "function the grapher does not support)."
                     } else if (result.order == 2 || method != null) {
@@ -162,6 +176,8 @@ private fun GraphTab(model: SolverViewModel) {
                     resetKey = model.viewResetKey,
                     onTap = { x, y -> if (canTap) model.tappedPoints.add(x to y) },
                     modifier = Modifier.fillMaxSize(),
+                    overlay = overlay,
+                    halfWidth = halfWidth,
                 )
             }
         }
@@ -172,6 +188,22 @@ private fun GraphTab(model: SolverViewModel) {
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 8.dp),
         ) {
+            if (partials.size > 1) {
+                val current = partials[partialIndex].n
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        if (result.kind == "eigen") "n = $current" else "N = $current",
+                        modifier = Modifier.width(96.dp),
+                    )
+                    Slider(
+                        value = partialIndex.toFloat(),
+                        onValueChange = { model.partialIndex = (it + 0.5f).toInt() },
+                        valueRange = 0f..(partials.size - 1).toFloat(),
+                        steps = (partials.size - 2).coerceAtLeast(0),
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
             if (showC1) {
                 ConstantSlider(if (showC2) "C₁" else "C", model.constant) { model.constant = it }
             }
@@ -182,9 +214,21 @@ private fun GraphTab(model: SolverViewModel) {
                 if (exact != null) {
                     Legend(
                         MaterialTheme.colorScheme.primary,
-                        if (result.kind == "transform") "Function of t" else "Exact solution",
+                        when (result.kind) {
+                            "transform" -> "Function of t"
+                            "fourier" -> "f(x) (periodic)"
+                            "boundary" -> "Solution"
+                            else -> "Exact solution"
+                        },
                     )
                     Spacer(Modifier.width(16.dp))
+                }
+                if (overlay != null && partials.isNotEmpty()) {
+                    Legend(
+                        MaterialTheme.colorScheme.tertiary,
+                        if (result.kind == "eigen") "Eigenfunction ${partials[partialIndex].n}"
+                        else "Partial sum, ${partials[partialIndex].n} terms",
+                    )
                 }
                 if (points != null) {
                     Legend(MaterialTheme.colorScheme.tertiary, method?.name ?: "Numerical")

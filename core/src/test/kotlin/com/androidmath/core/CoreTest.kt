@@ -45,6 +45,15 @@ class ExprTest {
         assertEquals(kotlin.math.sin(1.0), e.eval(3.0, 0.0, 0.0), 1e-12)
     }
 
+    @Test fun floorAndPeriodicExtension() {
+        assertEquals(-2.0, Expr.parseOrNull("floor(x)")!!.eval(-1.5, 0.0, 0.0), 0.0)
+        // x reduced to [-pi, pi): the sawtooth has period 2 pi.
+        val saw = Expr.parseOrNull("x - 2*pi*floor((x + pi)/(2*pi))")!!
+        assertEquals(1.0, saw.eval(1.0, 0.0, 0.0), 1e-12)
+        assertEquals(1.0, saw.eval(1.0 + 2 * PI, 0.0, 0.0), 1e-12)
+        assertEquals(-1.0, saw.eval(-1.0 - 4 * PI, 0.0, 0.0), 1e-12)
+    }
+
     @Test fun unsupportedInputIsRejected() {
         assertNull(Expr.parseOrNull("erf(x)"))
         assertNull(Expr.parseOrNull("x +"))
@@ -299,5 +308,34 @@ class ModelTest {
         assertEquals(2, nonlinear.equilibria.size)
         assertNull(nonlinear.applicableMethods.single().plot!!.xExpr)
         assertNotNull(Expr.parseOrNull(nonlinear.field!!.g))
+    }
+
+    @Test fun parsesFourier() {
+        val r = EngineJson.solveResult(fixture("fourier.json"))
+        assertEquals("fourier", r.kind)
+        assertEquals(PI, r.span!!, 1e-12)
+        assertEquals(listOf("full", "sine", "cosine"), r.applicableMethods.map { it.id })
+        val full = r.applicableMethods[0].plot!!
+        assertEquals(listOf(1, 2, 3, 5, 10, 20), full.partials.map { it.n })
+        val f = Expr.parseOrNull(full.particularExpr)!!
+        assertEquals(1.0, f.eval(1.0, 0.0, 0.0), 1e-12)
+        // Twenty terms of the sawtooth series are close to f away from the jumps.
+        val sum = Expr.parseOrNull(full.partials.last().expr)!!
+        assertEquals(1.0, sum.eval(1.0, 0.0, 0.0), 0.1)
+        assertEquals(f.eval(8.0, 0.0, 0.0), sum.eval(8.0, 0.0, 0.0), 0.1)
+        val one = Expr.parseOrNull(full.partials.first().expr)!!
+        assertEquals(2 * kotlin.math.sin(1.0), one.eval(1.0, 0.0, 0.0), 1e-9)
+    }
+
+    @Test fun parsesBoundaryAndEigen() {
+        val bvp = EngineJson.solveResult(fixture("boundary.json"))
+        assertEquals("boundary", bvp.kind)
+        val y = Expr.parseOrNull(bvp.applicableMethods.single().plot!!.particularExpr)!!
+        assertEquals(1.0, y.eval(PI / 2, 0.0, 0.0), 1e-12)
+        val eigen = EngineJson.solveResult(fixture("eigen.json"))
+        assertEquals("eigen", eigen.kind)
+        val functions = eigen.applicableMethods.single().plot!!.partials
+        assertEquals(listOf(1, 2, 3, 4, 5), functions.map { it.n })
+        for (p in functions) assertEquals(0.0, Expr.parseOrNull(p.expr)!!.eval(PI, 0.0, 0.0), 1e-9)
     }
 }

@@ -56,7 +56,17 @@ private val SECTIONS = listOf(
             "of nonlinear ones, and phase portraits",
         Mode.Systems,
     ),
-    Section("Fourier series and PDEs", "Fourier series, heat, wave and Laplace equations", null),
+    Section(
+        "Fourier series",
+        "Full, sine and cosine series with the coefficient integrals and converging partial sums",
+        Mode.Fourier,
+    ),
+    Section(
+        "Boundary value problems",
+        "Two-point boundary conditions, and the eigenvalue problem behind separation of variables",
+        Mode.Boundary,
+    ),
+    Section("Partial differential equations", "Heat, wave and Laplace equations", null),
     Section("Physics 1", "Motion, drag, springs, pendulums, cooling", null),
     Section("Physics 2", "RC, RL and RLC circuits, charged particles, decay", null),
 )
