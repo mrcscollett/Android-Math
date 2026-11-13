@@ -334,7 +334,7 @@ def test_variation_handles_what_undetermined_cannot():
 
 def test_second_order_errors():
     assert "all three" in json.loads(solve("y'' + y = 0", "0", "1", ""))["error"]
-    r = run("x y'' + y = 0")
+    r = run("y'' + sin(x) y = 0")
     assert r["ok"] and not any(m["applicable"] for m in r["methods"])
     assert "variable coefficients" in r["summary"]
 
@@ -565,6 +565,64 @@ def test_impulse_forcing():
     # After the impulse: e^{-(t-1)} sin(2(t-1)) / 2.
     assert abs(float(expr.subs(X, 1.5)) - math.exp(-0.5) * math.sin(1.0) / 2) < 1e-12
     assert "initial condition" in json.loads(solve("y' + y = u(t-1)"))["error"]
+
+
+# ---- phase 3: series solutions --------------------------------------------
+
+def _series_value(m, x1, key="particular_expr"):
+    C2 = sp.Symbol("C2")
+    expr = sp.sympify(m["plot"][key], locals={"x": X, "C": C, "C2": C2})
+    return expr, float(expr.subs({X: x1, C: 1, C2: 0})), float(expr.subs({X: x1, C: 0, C2: 1}))
+
+
+@pytest.mark.parametrize("text,y0,y1", [
+    ("y'' - x y = 0", "1", "0"),
+    ("y'' - x y = 0", "0", "1"),
+    ("y'' + x y' + y = 0", "1", "2"),
+    ("(1 - x^2) y'' - 2x y' + 6y = 0", "1", "1"),
+    ("(1 + x^2) y'' + x y' - y = 0", "2", "-1"),
+])
+def test_power_series_matches_numerical_solution(text, y0, y1):
+    r = json.loads(solve(text, "0", y0, y1))
+    m = method(r, "series")
+    assert m["applicable"] and m["verified"] is True
+    assert "a_{n+2}" in " ".join(l for s in m["steps"] for l in s["latex"])
+    expr = sp.sympify(m["plot"]["particular_expr"], locals={"x": X})
+    for x1 in (0.3, 0.15):   # mpmath.odefun only integrates forwards
+        reference = _second_reference(text, "0", y0, y1, x1)
+        # The series is truncated after x^7, so the error is of the size of the x^8 term.
+        assert abs(float(expr.subs(X, x1)) - reference) < 2e-5, (x1, float(expr.subs(X, x1)), reference)
+
+
+def test_airy_coefficients_and_recurrence():
+    m = method(run("y'' - x y = 0"), "series")
+    text = " ".join(l for s in m["steps"] for l in s["latex"])
+    assert "a_{3} = \\frac{a_{0}}{6}" in text and "a_{4} = \\frac{a_{1}}{12}" in text
+    assert "a_{6} = \\frac{a_{0}}{180}" in text
+    assert m["general_latex"].startswith("y = a_0\\left(1 + \\frac{x^{3}}{6}")
+
+
+def test_frobenius_two_roots():
+    # Bessel's equation of order 1/2: solutions are sin(x)/sqrt(x) and cos(x)/sqrt(x).
+    m = method(run("x^2 y'' + x y' + (x^2 - 1/4) y = 0"), "series")
+    assert m["applicable"] and m["verified"] is True
+    text = " ".join(l for s in m["steps"] for l in s["latex"])
+    assert "r_1 = \\frac{1}{2},\\qquad r_2 = - \\frac{1}{2}" in text
+    _, first, second = _series_value(m, 0.4, "general_expr")
+    assert abs(first - math.sin(0.4) / math.sqrt(0.4)) < 1e-7
+    assert abs(second - math.cos(0.4) / math.sqrt(0.4)) < 1e-6
+
+
+def test_frobenius_log_case_and_limits():
+    m = method(run("x^2 y'' + x y' + x^2 y = 0"), "series")   # Bessel J0
+    assert m["applicable"]
+    assert "About the second solution" in [s["title"] for s in m["steps"]]
+    _, first, _ = _series_value(m, 0.5, "general_expr")
+    assert abs(first - float(mpmath.besselj(0, 0.5))) < 1e-6
+    assert "irregular" in method(run("x^3 y'' + y = 0"), "series")["reason"]
+    assert "not polynomials" in method(run("y'' + sin(x) y = 0"), "series")["reason"]
+    assert method(run("y'' + y = 0"), "series")["applicable"] is False
+    assert "singular point" in method(json.loads(solve("x y'' + y = 0", "0", "1", "1")), "series")["reason"]
 
 
 def test_export_fixtures():

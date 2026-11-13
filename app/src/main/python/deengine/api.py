@@ -228,8 +228,10 @@ def _solve_second(prob, lhs, rhs, x0_text, y0_text, y1_text):
             "ies" if len(applicable) == 1 else "y", _method_list(applicable))
     else:
         summary = ("This is a linear second-order equation with variable "
-                   "coefficients. Step-by-step support covers constant "
-                   "coefficients and homogeneous Cauchy–Euler equations so far.")
+                   "coefficients that none of the methods here covers. Supported: "
+                   "constant coefficients, Cauchy-Euler equations, and series "
+                   "solutions about 0 for homogeneous equations with polynomial "
+                   "coefficients.")
     return {
         "schema": SCHEMA, "ok": True, "kind": "symbolic", "order": 2,
         "indep": xn, "dep": "y",

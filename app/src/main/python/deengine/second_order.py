@@ -530,4 +530,9 @@ def laplace(eq, ic):
                     steps, eq, None, sol, ic)
 
 
-METHODS = (characteristic, undetermined, variation, cauchy_euler, laplace)
+def power_series(eq, ic):
+    from . import series
+    return series.solve(eq, ic)
+
+
+METHODS = (characteristic, undetermined, variation, cauchy_euler, laplace, power_series)
