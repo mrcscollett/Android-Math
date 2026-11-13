@@ -3,6 +3,7 @@ import random
 import threading
 
 import sympy as sp
+from sympy.printing.latex import LatexPrinter
 
 # Functions the Kotlin plot evaluator understands (SymPy class name -> ok).
 _PLOT_FUNCS = {
@@ -11,8 +12,21 @@ _PLOT_FUNCS = {
 }
 
 
+class _Printer(LatexPrinter):
+    """SymPy's LaTeX with ln|u| written the textbook way instead of ln(|u|)."""
+
+    def _print_log(self, expr, exp=None):
+        arg = expr.args[0]
+        if isinstance(arg, sp.Abs):
+            inner = self._print(arg.args[0])
+            if exp is None:
+                return r"\ln\left|%s\right|" % inner
+            return r"\ln^{%s}\left|%s\right|" % (exp, inner)
+        return super()._print_log(expr, exp)
+
+
 def tex(expr):
-    return sp.latex(expr, ln_notation=True)
+    return _Printer({"ln_notation": True}).doprint(expr)
 
 
 def tex_side(expr, prob):

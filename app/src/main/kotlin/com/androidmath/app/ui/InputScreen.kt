@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -70,11 +71,15 @@ fun InputScreen(model: SolverViewModel) {
             )
         },
     ) { padding ->
+        // Centred and capped in width so the form is not stretched on tablets.
+        Box(
+            modifier = Modifier.fillMaxSize().padding(padding).imePadding(),
+            contentAlignment = Alignment.TopCenter,
+        ) {
         Column(
             modifier = Modifier
+                .widthIn(max = 640.dp)
                 .fillMaxSize()
-                .padding(padding)
-                .imePadding()
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp),
         ) {
@@ -198,6 +203,7 @@ fun InputScreen(model: SolverViewModel) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 12.dp, bottom = 24.dp),
             )
+        }
         }
     }
 }

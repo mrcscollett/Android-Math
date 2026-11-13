@@ -347,6 +347,13 @@ def _paren(expr):
     return tex(expr)
 
 
+def _signed_term(coef):
+    """LaTeX for '+ coef y', written as '- |coef| y' when coef is negative."""
+    if coef.could_extract_minus_sign() and not coef.is_Add:
+        return "- %s\\,y" % _paren(-coef)
+    return "+ %s\\,y" % _paren(coef)
+
+
 def _plus_c(expr):
     return "C" if expr == 0 else "%s + C" % tex(expr)
 
@@ -383,8 +390,7 @@ def linear(prob, f, ic):
         "Write in standard form",
         "Move the \\(y\\) term to the left so the equation reads "
         "\\(y' + p(%s)\\,y = q(%s)\\)." % (xn, xn),
-        ["%s + %s\\,y = %s" % (d, _paren(p), tex(q)) if p.could_extract_minus_sign() or p.is_Add
-         else "%s + %s\\,y = %s" % (d, tex(p), tex(q)),
+        ["%s %s = %s" % (d, _signed_term(p), tex(q)),
          "p(%s) = %s,\\qquad q(%s) = %s" % (xn, tex(p), xn, tex(q))])]
 
     P = integrate(p, x)
@@ -415,7 +421,7 @@ def linear(prob, f, ic):
         "Multiply through by the integrating factor",
         "After multiplying by \\(\\mu\\), the left side is exactly the "
         "derivative of the product \\(\\mu\\,y\\) (product rule in reverse).",
-        ["%s\\,%s + %s\\,y = %s" % (_paren(mu), d, _paren(sp.simplify(mu * p)), tex(muq)),
+        ["%s\\,%s %s = %s" % (_paren(mu), d, _signed_term(sp.simplify(mu * p)), tex(muq)),
          "\\frac{d}{d%s}\\left[%s\\,y\\right] = %s" % (xn, _paren(mu), tex(muq))]))
 
     R = with_abs(integrate(muq, x))
@@ -431,12 +437,18 @@ def linear(prob, f, ic):
                       general_tex="y = \\frac{1}{%s}\\left(%s + C\\right)" % (tex(mu), right_int))
         out["verify_note"] = "Left in integral form; nothing to substitute back."
         return out
-    steps.append(step(
-        "Integrate both sides",
-        "Integrate with respect to \\(%s\\). The left side undoes the derivative." % xn,
-        ["%s\\,y = %s" % (_paren(mu), right_int),
-         "%s\\,y = %s" % (_paren(mu), _plus_c(R))],
-        [step("Right integral", "", ["%s = %s" % (right_int, tex(R))])]))
+    if muq == 0:
+        steps.append(step(
+            "Integrate both sides",
+            "The derivative of \\(\\mu\\,y\\) is zero, so \\(\\mu\\,y\\) is a constant.",
+            ["%s\\,y = C" % _paren(mu)]))
+    else:
+        steps.append(step(
+            "Integrate both sides",
+            "Integrate with respect to \\(%s\\). The left side undoes the derivative." % xn,
+            ["%s\\,y = %s" % (_paren(mu), right_int),
+             "%s\\,y = %s" % (_paren(mu), _plus_c(R))],
+            [step("Right integral", "", ["%s = %s" % (right_int, tex(R))])]))
 
     general = _tidy((R + C) / mu, C)
     steps.append(step(
