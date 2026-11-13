@@ -72,7 +72,8 @@ expect bernoulli 'text="Bernoulli substitution"'
 open second "d2y/dx2+3*dy/dx+2*y=e^x" 0 1 0 'text="Steps"' "--es mode second --es yp0 0"
 expect second 'text="Undetermined coefficients"'
 expect second 'text="Variation of parameters"'
-expect second 'text="Laplace transform"'
+# The third chip (Laplace transform) is scrolled off this narrow screen, so check the count.
+expect second 'text="3 ways to solve this"'
 expect second 'Guess the particular solution'
 
 open second_graph "d2y/dx2+y=0" "" "" 1 'text="Graph"' "--es mode second"
