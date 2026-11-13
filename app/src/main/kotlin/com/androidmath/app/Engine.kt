@@ -61,8 +61,8 @@ object Engine {
 
     /** Solves or analyses the planar system x' = f(x, y), y' = g(x, y). */
     suspend fun system(
-        context: Context, f: String, g: String, x0: String, y0: String,
-    ): Pair<String, SolveResult> = call(context, "system", f, g, x0, y0)
+        context: Context, f: String, g: String, x0: String, y0: String, h: String, z0: String,
+    ): Pair<String, SolveResult> = call(context, "system", f, g, x0, y0, h, z0)
 
     /** Fourier series of f on (-L, L) and the half-range series on (0, L). */
     suspend fun fourier(

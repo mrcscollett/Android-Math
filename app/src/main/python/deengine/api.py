@@ -23,9 +23,10 @@ def transform(text, direction="forward"):
     return _guard(lambda: work(text))
 
 
-def system(f_text, g_text, x0_text="", y0_text=""):
-    """Solve or analyse the planar system x' = f(x, y), y' = g(x, y)."""
-    return _guard(lambda: systems.solve(f_text or "", g_text or "", x0_text or "", y0_text or ""))
+def system(f_text, g_text, x0_text="", y0_text="", h_text="", z0_text=""):
+    """Solve or analyse x' = f, y' = g (and optionally z' = h for a 3x3 linear system)."""
+    return _guard(lambda: systems.solve(f_text or "", g_text or "", x0_text or "", y0_text or "",
+                                        h_text or "", z0_text or ""))
 
 
 def fourier(f_text, left_text="", L_text=""):

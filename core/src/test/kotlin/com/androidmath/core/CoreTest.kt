@@ -338,4 +338,66 @@ class ModelTest {
         assertEquals(listOf(1, 2, 3, 4, 5), functions.map { it.n })
         for (p in functions) assertEquals(0.0, Expr.parseOrNull(p.expr)!!.eval(PI, 0.0, 0.0), 1e-9)
     }
+
+    @Test fun parsesForcedAndThreeBySystems() {
+        val forced = EngineJson.solveResult(fixture("system_forced.json"))
+        assertEquals("system", forced.kind)
+        assertNull(forced.field)
+        val m = forced.applicableMethods.single()
+        assertEquals("variation", m.id)
+        assertEquals(1.0, Expr.parseOrNull(m.plot!!.xExpr)!!.eval(2.0, 0.0, 0.0), 1e-12)
+        assertEquals(-2.0, Expr.parseOrNull(m.plot!!.yExpr)!!.eval(2.0, 0.0, 0.0), 1e-12)
+        val three = EngineJson.solveResult(fixture("system_three.json"))
+        assertNull(three.field)
+        assertTrue(three.equilibria.isEmpty())
+        assertEquals(listOf("eigen", "expm"), three.applicableMethods.map { it.id })
+        assertTrue(three.applicableMethods[0].particularLatex!!.contains("z(t)"))
+    }
+}
+
+class HistoryTest {
+    private fun entry(equation: String, time: Long, mode: String = "first") =
+        History.entry(mode, "First-order equation", equation, mapOf("equation" to equation, "x0" to ""), time)
+
+    @Test fun newestFirstAndNoDuplicates() {
+        var list = emptyList<HistoryEntry>()
+        list = History.add(list, entry("y' = y", 1))
+        list = History.add(list, entry("y' = x", 2))
+        list = History.add(list, entry("y' = y", 3))
+        assertEquals(listOf("y' = y", "y' = x"), list.map { it.label })
+        assertEquals(3L, list[0].time)
+        // Blank fields do not affect identity, and are not stored.
+        assertEquals(History.keyOf("first", mapOf("equation" to "y' = y")), list[0].key)
+        assertFalse(list[0].fields.containsKey("x0"))
+        // The same text in another section is a different problem.
+        assertEquals(3, History.add(list, entry("y' = y", 4, mode = "numeric")).size)
+    }
+
+    @Test fun favoritesSurviveCapClearAndResolve() {
+        var list = History.add(emptyList(), entry("keep", 0))
+        list = History.toggleFavorite(list, list[0].key)
+        for (i in 1..History.MAX_RECENT + 10) list = History.add(list, entry("p$i", i.toLong()))
+        assertEquals(History.MAX_RECENT + 1, list.size)
+        assertEquals("keep", History.favorites(list).single().label)
+        assertEquals("p${History.MAX_RECENT + 10}", History.recent(list).first().label)
+        assertEquals("p11", History.recent(list).last().label)
+        // Solving a favorite again keeps the star and moves it to the top.
+        list = History.add(list, entry("keep", 999))
+        assertTrue(list[0].favorite)
+        assertEquals(999L, list[0].time)
+        assertEquals(listOf("keep"), History.clearRecent(list).map { it.label })
+        val off = History.toggleFavorite(list, list[0].key)
+        assertTrue(History.favorites(off).isEmpty())
+    }
+
+    @Test fun roundTripsThroughJson() {
+        val list = History.add(
+            History.add(emptyList(), entry("y' = \"quoted\" + x", 5)),
+            History.entry("system", "Systems", "x' = y, y' = -x", mapOf("equation" to "y", "equation2" to "-x"), 6),
+        )
+        assertEquals(list, History.decode(History.encode(list)))
+        assertTrue(History.decode(null).isEmpty())
+        assertTrue(History.decode("not json").isEmpty())
+        assertTrue(History.decode("").isEmpty())
+    }
 }

@@ -253,12 +253,13 @@ private fun covers(marker: Offset?, left: Float, top: Float, width: Int, height:
 /**
  * Phase plane of the system x' = f(x, y), y' = g(x, y): the direction field,
  * the equilibrium points, the exact solution curve (x(t), y(t)) when known,
- * and the orbit through every tapped point.
+ * and the orbit through every tapped point. When [f] and [g] are null (the
+ * system is not autonomous) only the solution curve is drawn.
  */
 @Composable
 fun PhaseView(
-    f: Expr,
-    g: Expr,
+    f: Expr?,
+    g: Expr?,
     exactX: Expr?,
     exactY: Expr?,
     ic: InitialCondition?,
@@ -295,8 +296,10 @@ fun PhaseView(
     val spacingPx = with(density) { 28.dp.toPx() }
     val lengthPx = with(density) { 14.dp.toPx() }
 
+    // Without a field (forcing that depends on t) only the solution curve is drawn.
     val arrows = remember(f, g, vp, size) {
-        if (vp != null) Plot.vectorField(f, g, vp, w, h, spacingPx, lengthPx) else FloatArray(0)
+        if (vp != null && f != null && g != null) Plot.vectorField(f, g, vp, w, h, spacingPx, lengthPx)
+        else FloatArray(0)
     }
     val exactLines = remember(exactX, exactY, vp, size) {
         if (exactX != null && exactY != null && vp != null) {
@@ -313,7 +316,7 @@ fun PhaseView(
         list
     }
     val orbitLines = remember(f, g, starts, vp, size) {
-        if (vp == null) emptyList()
+        if (vp == null || f == null || g == null) emptyList()
         else starts.flatMap { (x0, y0) ->
             Plot.path(Ode.trajectory(f, g, x0, y0, vp.xMin, vp.xMax, vp.yMin, vp.yMax), vp, w, h)
         }

@@ -77,6 +77,8 @@ private val INVERSE_EXAMPLES = listOf(
 private data class Example(
     val equation: String, val x0: String = "", val y0: String = "", val slope: String = "",
     val second: String = "",
+    /** For a 3x3 system: the right-hand side of z'; [slope] then holds z(0). */
+    val third: String = "",
 )
 
 private val KEYS_FOURIER = listOf(
@@ -116,7 +118,7 @@ private val EIGEN_KINDS = listOf(
 )
 
 private val KEYS_XY = listOf(
-    "x", "y", "^", "(", ")", "*", "/", "+", "-", "sin(", "cos(", "e^(", "sqrt(", "pi",
+    "x", "y", "z", "t", "^", "(", ")", "*", "/", "+", "-", "sin(", "cos(", "e^(", "sqrt(", "pi",
 )
 
 private val SYSTEM_EXAMPLES = listOf(
@@ -126,6 +128,8 @@ private val SYSTEM_EXAMPLES = listOf(
     Example("x - y", second = "x + 3y"),
     Example("x(1 - y)", second = "y(x - 1)"),
     Example("y", second = "-sin(x)"),
+    Example("x + 2y + e^t", "0", "0", second = "3x + 2y"),
+    Example("x + y", "1", "0", slope = "1", second = "y + z", third = "2z"),
 )
 
 private val FIRST_ORDER_EXAMPLES = listOf(
@@ -280,6 +284,28 @@ fun InputScreen(model: SolverViewModel) {
                     keyboardActions = KeyboardActions(onDone = { submit() }),
                 )
             }
+            if (system) {
+                OutlinedTextField(
+                    value = model.equation3,
+                    onValueChange = model::onEquation3Change,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp)
+                        .onFocusChanged { if (it.isFocused) model.activeField = 2 },
+                    label = { Text("z' =  (optional, for a 3\u00d73 system)") },
+                    placeholder = { Text("leave empty for two equations") },
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Monospace),
+                    isError = model.previewError != null || model.inputError != null,
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.None,
+                        autoCorrectEnabled = false,
+                        keyboardType = KeyboardType.Ascii,
+                        imeAction = ImeAction.Done,
+                    ),
+                    keyboardActions = KeyboardActions(onDone = { submit() }),
+                )
+            }
             // Wraps onto extra lines so every key is visible without scrolling.
             FlowRow(
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
@@ -349,6 +375,9 @@ fun InputScreen(model: SolverViewModel) {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     NumberField(model.x0, { model.x0 = it }, if (system) "x(0)" else "x\u2080")
                     NumberField(model.y0, { model.y0 = it }, if (system) "y(0)" else "y(x\u2080)")
+                    if (system && model.equation3.text.isNotBlank()) {
+                        NumberField(model.z0, { model.z0 = it }, "z(0)")
+                    }
                     if (second) {
                         // Third and fourth order take the remaining values as a comma-separated list.
                         if (model.previewOrder >= 3) {
@@ -492,6 +521,10 @@ fun InputScreen(model: SolverViewModel) {
                             model.x0 = example.x0
                             model.y0 = example.y0
                             model.yPrime0 = example.slope
+                            if (system) {
+                                model.setEquation3Text(example.third)
+                                model.z0 = example.slope
+                            }
                         },
                         label = {
                             Text(
@@ -500,6 +533,9 @@ fun InputScreen(model: SolverViewModel) {
                                         "f = ${example.equation} for x > 0, ${example.second} for x < 0,  " +
                                             "L = ${example.x0}"
                                     fourier -> "f = ${example.equation},  L = ${example.x0}"
+                                    system && example.third.isNotEmpty() ->
+                                        "x' = ${example.equation},  y' = ${example.second},  " +
+                                            "z' = ${example.third}"
                                     system && example.x0.isEmpty() ->
                                         "x' = ${example.equation},  y' = ${example.second}"
                                     system -> "x' = ${example.equation},  y' = ${example.second},  " +

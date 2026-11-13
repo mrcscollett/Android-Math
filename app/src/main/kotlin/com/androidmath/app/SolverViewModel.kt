@@ -9,6 +9,8 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.androidmath.core.History
+import com.androidmath.core.HistoryEntry
 import com.androidmath.core.Method
 import com.androidmath.core.SolveResult
 import kotlinx.coroutines.Job
@@ -23,7 +25,7 @@ enum class Mode(val title: String) {
     SecondOrder("Second-order equation"),
     Numerical("Numerical methods"),
     Laplace("Laplace transforms"),
-    Systems("System of two equations"),
+    Systems("System of equations"),
     Fourier("Fourier series"),
     Boundary("Boundary value problems"),
 }
@@ -38,8 +40,18 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
     /** In the systems section: the right-hand side of y' (the first field holds x'). */
     var equation2 by mutableStateOf(TextFieldValue(""))
         private set
-    /** Which equation field the math keys type into (0 or 1). */
+    /** In the systems section: the optional right-hand side of z' (a 3x3 linear system). */
+    var equation3 by mutableStateOf(TextFieldValue(""))
+        private set
+    /** z(0), used by 3x3 systems. */
+    var z0 by mutableStateOf("")
+    /** Which equation field the math keys type into (0, 1 or 2). */
     var activeField by mutableStateOf(0)
+
+    /** Solved problems, newest first; favorites are kept until unstarred. */
+    var history by mutableStateOf<List<HistoryEntry>>(emptyList())
+        private set
+    private val historyStore = HistoryStore(app)
     var x0 by mutableStateOf("")
     var y0 by mutableStateOf("")
     /** y'(x0), used by second-order problems. */
@@ -80,6 +92,7 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
     private var previewJob: Job? = null
 
     init {
+        history = historyStore.load()
         viewModelScope.launch {
             Engine.warmUp(getApplication())
             engineReady = true
@@ -145,8 +158,9 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
             mode = newMode
             equation = TextFieldValue("")
             equation2 = TextFieldValue("")
+            equation3 = TextFieldValue("")
             activeField = 0
-            x0 = ""; y0 = ""; yPrime0 = ""
+            x0 = ""; y0 = ""; yPrime0 = ""; z0 = ""
             pointA = ""; pointB = ""; valueA = ""; valueB = ""
             slopeAtA = false; slopeAtB = false
             previewLatex = ""; previewError = null; previewOrder = 1; inputError = null
@@ -166,11 +180,21 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
         if (textChanged) refreshPreview()
     }
 
+    fun onEquation3Change(value: TextFieldValue) {
+        val textChanged = value.text != equation3.text
+        equation3 = value
+        if (textChanged) refreshPreview()
+    }
+
     private fun refreshPreview() {
         inputError = null
         previewJob?.cancel()
-        val text = if (twoFields) equation.text + ";" + equation2.text else equation.text
-        val blank = equation.text.isBlank() && equation2.text.isBlank()
+        val text = when {
+            mode == Mode.Systems -> equation.text + ";" + equation2.text + ";" + equation3.text
+            twoFields -> equation.text + ";" + equation2.text
+            else -> equation.text
+        }
+        val blank = equation.text.isBlank() && equation2.text.isBlank() && equation3.text.isBlank()
         previewJob = viewModelScope.launch {
             delay(250)
             val r = Engine.preview(getApplication(), if (blank) "" else text, previewKind)
@@ -188,15 +212,157 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
         onEquation2Change(TextFieldValue(text, TextRange(text.length)))
     }
 
+    fun setEquation3Text(text: String) {
+        onEquation3Change(TextFieldValue(text, TextRange(text.length)))
+    }
+
     /** Inserts text at the cursor of the active field (used by the math key row). */
     fun insert(piece: String) {
-        val second = twoFields && activeField == 1
-        val current = if (second) equation2 else equation
+        val field = when {
+            mode == Mode.Systems && activeField == 2 -> 2
+            twoFields && activeField == 1 -> 1
+            else -> 0
+        }
+        val current = when (field) {
+            2 -> equation3
+            1 -> equation2
+            else -> equation
+        }
         val start = current.selection.min
         val end = current.selection.max
         val text = current.text.substring(0, start) + piece + current.text.substring(end)
         val updated = TextFieldValue(text, TextRange(start + piece.length))
-        if (second) onEquation2Change(updated) else onEquationChange(updated)
+        when (field) {
+            2 -> onEquation3Change(updated)
+            1 -> onEquation2Change(updated)
+            else -> onEquationChange(updated)
+        }
+    }
+
+    /** The section key used by launch intents and the history ("first", "inverse", "eigen", ...). */
+    private val modeKey: String
+        get() = when (mode) {
+            Mode.FirstOrder -> "first"
+            Mode.SecondOrder -> "second"
+            Mode.Numerical -> "numeric"
+            Mode.Laplace -> if (inverse) "inverse" else "laplace"
+            Mode.Systems -> "system"
+            Mode.Fourier -> "fourier"
+            Mode.Boundary -> if (eigenMode) "eigen" else "boundary"
+        }
+
+    /** Every input box of the current section, by the names [restore] understands. */
+    private fun snapshot(): Map<String, String> {
+        val fields = LinkedHashMap<String, String>()
+        fields["equation"] = equation.text
+        when (mode) {
+            Mode.FirstOrder, Mode.SecondOrder -> {
+                fields["x0"] = x0; fields["y0"] = y0
+                if (isSecondOrder) fields["yp0"] = yPrime0
+            }
+            Mode.Numerical -> {
+                fields["x0"] = x0; fields["y0"] = y0
+                fields["h"] = stepSize; fields["n"] = stepCount
+            }
+            Mode.Laplace -> {}
+            Mode.Systems -> {
+                fields["equation2"] = equation2.text
+                fields["equation3"] = equation3.text
+                fields["x0"] = x0; fields["y0"] = y0
+                if (equation3.text.isNotBlank()) fields["z0"] = z0
+            }
+            Mode.Fourier -> {
+                fields["equation2"] = equation2.text
+                fields["x0"] = x0
+            }
+            Mode.Boundary -> if (eigenMode) {
+                fields["equation"] = ""
+                fields["bc"] = eigenKind
+                fields["x0"] = x0
+            } else {
+                fields["a"] = pointA; fields["va"] = valueA
+                fields["ka"] = if (slopeAtA) "dy" else "y"
+                fields["b"] = pointB; fields["vb"] = valueB
+                fields["kb"] = if (slopeAtB) "dy" else "y"
+            }
+        }
+        return fields
+    }
+
+    /** A one-line plain-text description of the current problem for the history list. */
+    private fun historyLabel(): String = when (mode) {
+        Mode.Systems -> "x' = ${equation.text},  y' = ${equation2.text}" +
+            (if (equation3.text.isNotBlank()) ",  z' = ${equation3.text}" else "") +
+            (if (x0.isNotBlank()) ",  x(0) = $x0,  y(0) = $y0" else "")
+        Mode.Fourier -> "f(x) = ${equation.text}" +
+            (if (equation2.text.isNotBlank()) " (x > 0), ${equation2.text} (x < 0)" else "") + ",  L = $x0"
+        Mode.Laplace -> if (inverse) "Inverse of ${equation.text}" else "Transform of ${equation.text}"
+        Mode.Numerical -> "${equation.text},  y($x0) = $y0,  h = $stepSize,  $stepCount steps"
+        Mode.Boundary -> if (eigenMode) {
+            "y'' + \u03bby = 0,  conditions $eigenKind,  L = $x0"
+        } else {
+            "${equation.text},  ${if (slopeAtA) "y'" else "y"}($pointA) = $valueA,  " +
+                "${if (slopeAtB) "y'" else "y"}($pointB) = $valueB"
+        }
+        Mode.FirstOrder, Mode.SecondOrder -> equation.text +
+            (if (x0.isNotBlank()) ",  y($x0) = $y0" else "") +
+            (if (isSecondOrder && yPrime0.isNotBlank()) ",  y'($x0) = $yPrime0" else "")
+    }
+
+    private fun record() {
+        history = History.add(
+            history,
+            History.entry(modeKey, mode.title, historyLabel(), snapshot(), System.currentTimeMillis()),
+        )
+        historyStore.save(history)
+    }
+
+    fun toggleFavorite(entry: HistoryEntry) {
+        history = History.toggleFavorite(history, entry.key)
+        historyStore.save(history)
+    }
+
+    fun clearRecent() {
+        history = History.clearRecent(history)
+        historyStore.save(history)
+    }
+
+    /**
+     * Fills the input screen from saved fields and solves. This is the one
+     * way a stored problem is reopened: launch intents and history entries
+     * both come through here. [key] is a section key as in [modeKey].
+     */
+    fun restore(key: String, fields: Map<String, String>, openTab: Int = 0) {
+        open(
+            when (key) {
+                "second" -> Mode.SecondOrder
+                "numeric" -> Mode.Numerical
+                "laplace", "inverse" -> Mode.Laplace
+                "system" -> Mode.Systems
+                "fourier" -> Mode.Fourier
+                "boundary", "eigen" -> Mode.Boundary
+                else -> Mode.FirstOrder
+            }
+        )
+        chooseInverse(key == "inverse")
+        chooseEigen(key == "eigen")
+        setEquationText(fields["equation"] ?: "")
+        setEquation2Text(fields["equation2"] ?: "")
+        setEquation3Text(fields["equation3"] ?: "")
+        pointA = fields["a"] ?: ""
+        valueA = fields["va"] ?: ""
+        slopeAtA = fields["ka"] == "dy"
+        pointB = fields["b"] ?: ""
+        valueB = fields["vb"] ?: ""
+        slopeAtB = fields["kb"] == "dy"
+        fields["bc"]?.let { eigenKind = it }
+        x0 = fields["x0"] ?: ""
+        y0 = fields["y0"] ?: ""
+        yPrime0 = fields["yp0"] ?: ""
+        z0 = fields["z0"] ?: ""
+        fields["h"]?.let { stepSize = it }
+        fields["n"]?.let { stepCount = it }
+        solve(openTab)
     }
 
     /** True when enough has been typed to press Solve. */
@@ -217,7 +383,10 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
             } else if (mode == Mode.Laplace) {
                 Engine.transform(getApplication(), equation.text, inverse)
             } else if (mode == Mode.Systems) {
-                Engine.system(getApplication(), equation.text, equation2.text, x0, y0)
+                Engine.system(
+                    getApplication(), equation.text, equation2.text, x0, y0,
+                    equation3.text, if (equation3.text.isNotBlank()) z0 else "",
+                )
             } else if (mode == Mode.Fourier) {
                 Engine.fourier(getApplication(), equation.text, equation2.text, x0)
             } else if (mode == Mode.Boundary && eigenMode) {
@@ -238,6 +407,7 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
                 inputError = parsed.error
                 return@launch
             }
+            record()
             resultJson = json
             result = parsed
             methodId = parsed.applicableMethods.firstOrNull()?.id

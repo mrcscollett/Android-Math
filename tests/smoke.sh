@@ -137,4 +137,25 @@ open eigen "0" pi "" 1 'text="Graph"' "--es mode eigen --es bc dd"
 expect eigen 'text="Eigenvalue problem"'
 expect eigen 'Eigenfunction 1'
 
+open system_forced "x+2*y+e^t" 0 0 0 'text="Steps"' "--es mode system --es equation2 '3*x+2*y'"
+expect system_forced 'Variation of parameters (systems)'
+expect system_forced 'Find a fundamental matrix'
+
+open system_three "x+y" 1 0 0 'text="Steps"' "--es mode system --es equation2 'y+z' --es equation3 '2*z' --es z0 1"
+expect system_three 'text="Eigenvalue method"'
+expect system_three 'Find the eigenvectors'
+
+# The problems opened above must now be listed on the home screen.
+adb shell am force-stop $PKG
+adb shell "am start -W -n $PKG/.MainActivity" >/dev/null
+sleep 8
+adb shell input swipe 160 500 160 100 300
+adb shell input swipe 160 500 160 100 300
+adb shell input swipe 160 500 160 100 300
+sleep 2
+adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1
+adb exec-out cat /sdcard/ui.xml > "$OUT/history.xml"
+adb exec-out screencap -p > "$OUT/history.png"
+expect history 'Clear recent'
+
 exit $fail

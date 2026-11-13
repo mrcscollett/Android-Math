@@ -26,8 +26,11 @@ What it covers so far:
   series, with the coefficient integrals and a graph of the partial sums.
 - **Boundary value problems**: two-point conditions on y or y' (one solution,
   none, or infinitely many), and the eigenvalue problem y'' + lambda y = 0.
-- **Systems**: eigenvalue method and matrix exponential for linear 2x2 systems,
+- **Systems**: eigenvalue method and matrix exponential for linear 2x2 and 3x3
+  systems, forced 2x2 systems (shifted equilibrium, variation of parameters),
   linearization of nonlinear systems, and phase portraits.
+- **History and favorites**: solved problems are listed on the home screen and
+  can be reopened or starred.
 - **Numerical methods**: Euler, improved Euler, midpoint, RK4,
   Adams-Bashforth and adaptive RK45, with step tables and the error against
   the exact solution when one is known.

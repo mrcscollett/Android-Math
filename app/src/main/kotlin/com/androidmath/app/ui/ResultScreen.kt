@@ -265,9 +265,23 @@ private fun PhaseTab(model: SolverViewModel) {
 
     Column(Modifier.fillMaxSize()) {
         Box(Modifier.weight(1f).fillMaxWidth()) {
-            if (f == null || g == null) {
+            val autonomous = result.field != null
+            val hasCurve = exactX != null && exactY != null
+            // A three-equation system has no plane to draw in.
+            val three = result.input3x3()
+            if (autonomous && (f == null || g == null)) {
                 Text(
                     "This system uses a function the grapher does not support yet.",
+                    modifier = Modifier.align(Alignment.Center).padding(24.dp),
+                )
+            } else if (three || (!autonomous && !hasCurve)) {
+                Text(
+                    if (three) {
+                        "A 3\u00d73 system has no phase plane; see the Steps tab."
+                    } else {
+                        "The forcing depends on t, so there is no fixed direction field. " +
+                            "Add initial values to see the solution curve."
+                    },
                     modifier = Modifier.align(Alignment.Center).padding(24.dp),
                 )
             } else {
@@ -278,7 +292,7 @@ private fun PhaseTab(model: SolverViewModel) {
                     equilibria = result.equilibria,
                     tapped = model.tappedPoints,
                     resetKey = model.viewResetKey,
-                    onTap = { x, y -> model.tappedPoints.add(x to y) },
+                    onTap = { x, y -> if (autonomous) model.tappedPoints.add(x to y) },
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -295,7 +309,7 @@ private fun PhaseTab(model: SolverViewModel) {
                     Legend(MaterialTheme.colorScheme.primary, "Exact solution")
                     Spacer(Modifier.width(16.dp))
                 }
-                Legend(MaterialTheme.colorScheme.tertiary, "Trajectories")
+                if (result.field != null) Legend(MaterialTheme.colorScheme.tertiary, "Trajectories")
                 if (result.equilibria.isNotEmpty()) {
                     Spacer(Modifier.width(16.dp))
                     Legend(MaterialTheme.colorScheme.error, "Equilibria")
@@ -307,8 +321,13 @@ private fun PhaseTab(model: SolverViewModel) {
                 TextButton(onClick = { model.viewResetKey++ }) { Text("Reset view") }
             }
             Text(
-                "Tap the phase plane to draw the trajectory through that point. The axes are " +
-                    "x and y; time runs along each curve in the direction of the dots.",
+                if (result.field == null) {
+                    "The curve is the solution (x(t), y(t)) for the given initial values. " +
+                        "Drag to move, pinch to zoom."
+                } else {
+                    "Tap the phase plane to draw the trajectory through that point. The axes " +
+                        "are x and y; time runs along each curve in the direction of the dots."
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -337,3 +356,6 @@ private fun Legend(color: Color, label: String) {
         Text(label, style = MaterialTheme.typography.labelMedium)
     }
 }
+
+/** True for a three-equation system (its solution names z(t)). */
+private fun com.androidmath.core.SolveResult.input3x3(): Boolean = inputLatex.contains("z' =")

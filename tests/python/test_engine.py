@@ -686,13 +686,13 @@ def test_nonlinear_system_linearization():
     pendulum = json.loads(system("y", "-sin(x)"))
     assert {e["label"] for e in pendulum["equilibria"]} == {"center", "saddle point"}
     shifted = json.loads(system("x + 1", "y"))
-    assert shifted["equilibria"][0]["x"] == -1.0 and "constant terms" in shifted["summary"]
+    assert shifted["equilibria"][0]["x"] == -1.0 and "constant forcing" in shifted["summary"]
 
 
 def test_system_errors_and_preview():
     assert "autonomous" in json.loads(system("t x", "y"))["error"]
     assert "both equations" in json.loads(system("x", ""))["error"]
-    assert "both x(0) and y(0)" in json.loads(system("x", "y", "1", ""))["error"]
+    assert "x(0) and y(0)" in json.loads(system("x", "y", "1", ""))["error"]
     assert json.loads(preview("x + 2y;3x", "system"))["latex"] == "x' = x + 2 y,\\qquad y' = 3 x"
     assert not json.loads(preview("q;x", "system"))["ok"]
 
@@ -1084,6 +1084,112 @@ def test_eigenvalue_problem_errors():
     assert "positive" in json.loads(eigen_problem("dd", "-1"))["error"]
 
 
+# ---- group 3: forced and 3x3 systems --------------------------------------
+
+def _system_rk4(exprs, start, t_end, h=0.0005):
+    """Hand RK4 for a system given as plot-style strings in x, y, z and t."""
+    Z, Tt = sp.Symbol("z"), sp.Symbol("t")
+    fns = [sp.lambdify((Tt, X, Y, Z), sp.sympify(e, locals={"x": X, "y": Y, "z": Z, "t": Tt, "e": sp.E}), "math")
+           for e in exprs]
+    state = list(start) + [0.0] * (3 - len(start))
+    t = 0.0
+
+    def d(tt, v):
+        out = [fn(tt, v[0], v[1], v[2]) for fn in fns]
+        return out + [0.0] * (3 - len(out))
+    for _ in range(int(round(t_end / h))):
+        k1 = d(t, state)
+        k2 = d(t + h / 2, [a + h / 2 * b for a, b in zip(state, k1)])
+        k3 = d(t + h / 2, [a + h / 2 * b for a, b in zip(state, k2)])
+        k4 = d(t + h, [a + h * b for a, b in zip(state, k3)])
+        state = [a + h / 6 * (p + 2 * q + 2 * u + w) for a, p, q, u, w in zip(state, k1, k2, k3, k4)]
+        t += h
+    return state
+
+
+def _sys_at(m, key, t_value):
+    return float(sp.sympify(m["plot"][key], locals={"x": X}).subs(X, t_value))
+
+
+# (f, g, python forms of f and g, x0, y0, applicable ids)
+FORCED_SYSTEMS = [
+    ("x + 2y + 1", "3x + 2y - 2", "x + 2*y + 1", "3*x + 2*y - 2", "1", "0", ["shift", "variation"]),
+    ("y", "-x + 1", "y", "-x + 1", "2", "0", ["shift", "variation"]),
+    ("x + 2y + e^t", "3x + 2y", "x + 2*y + exp(t)", "3*x + 2*y", "0", "0", ["variation"]),
+    ("y + t", "-x", "y + t", "-x", "1", "0", ["variation"]),
+    ("-x + sin(t)", "-2y + t^2", "-x + sin(t)", "-2*y + t**2", "1", "-1", ["variation"]),
+    ("x + 2y + 1", "2x + 4y", "x + 2*y + 1", "2*x + 4*y", "0", "1", ["variation"]),
+]
+
+
+@pytest.mark.parametrize("f,g,pf,pg,x0,y0,ids", FORCED_SYSTEMS)
+def test_forced_system_matches_numerical_solution(f, g, pf, pg, x0, y0, ids):
+    r = json.loads(system(f, g, x0, y0))
+    assert r["ok"], r.get("error")
+    assert [m["id"] for m in r["methods"] if m["applicable"]] == ids
+    reference = _system_rk4([pf, pg], [float(x0), float(y0)], 0.7)
+    for m in r["methods"]:
+        if not m["applicable"]:
+            continue
+        assert m["verified"] is True, m["verify_note"]
+        assert abs(_sys_at(m, "x_expr", 0.7) - reference[0]) < 1e-7 * (1 + abs(reference[0]))
+        assert abs(_sys_at(m, "y_expr", 0.7) - reference[1]) < 1e-7 * (1 + abs(reference[1]))
+    time_dependent = "t" in pf or "t" in pg
+    assert (r["field"] is None) == time_dependent
+
+
+def test_forced_system_general_solution_and_marks():
+    r = json.loads(system("x + 2y + 1", "3x + 2y - 2"))
+    assert r["equilibria"] == [{"x": 1.5, "y": -1.25, "label": "saddle point"}]
+    for m in r["methods"][:2]:
+        assert m["verified"] is True and "C_{1}" in m["general_latex"] and m["particular_latex"] is None
+    assert "Shift back" in [s["title"] for s in method(r, "shift")["steps"]]
+    forced = json.loads(system("-x + sin(t)", "-2y + t^2"))
+    assert method(forced, "variation")["verified"] is True
+    assert "depends on" in method(forced, "shift")["reason"]
+    assert "linear in x and y" in json.loads(system("x y + t", "y"))["error"]
+
+
+# (f, g, h, python forms, start, defective?)
+THREE_SYSTEMS = [
+    ("x + y", "y + z", "2z", ["x + y", "y + z", "2*z"], ["1", "0", "1"], True),
+    ("y", "-x", "-z", ["y", "-x", "-z"], ["1", "0", "2"], False),
+    ("2x", "2y", "3z", ["2*x", "2*y", "3*z"], ["1", "1", "1"], False),
+    ("x + y", "y + z", "z", ["x + y", "y + z", "z"], ["1", "1", "1"], True),
+    # Eigenvalues -1, -1, 4 with a single eigenvector for -1.
+    ("x + 2y", "3x + 2y", "-z + x", ["x + 2*y", "3*x + 2*y", "-z + x"], ["1", "0", "0"], True),
+    ("x + 2y", "3x + 2y", "2z + x", ["x + 2*y", "3*x + 2*y", "2*z + x"], ["1", "0", "0"], False),
+]
+
+
+@pytest.mark.parametrize("f,g,h,py,start,defective", THREE_SYSTEMS)
+def test_three_by_three_matches_numerical_solution(f, g, h, py, start, defective):
+    r = json.loads(system(f, g, start[0], start[1], h, start[2]))
+    assert r["ok"], r.get("error")
+    assert r["field"] is None and r["ic"]["z0"] == float(start[2])
+    assert [m["id"] for m in r["methods"] if m["applicable"]] == ["eigen", "expm"]
+    reference = _system_rk4(py, [float(v) for v in start], 0.6)
+    for m in r["methods"]:
+        assert m["verified"] is True, m["verify_note"]
+        for key, want in zip(("x_expr", "y_expr", "z_expr"), reference):
+            assert abs(_sys_at(m, key, 0.6) - want) < 1e-7 * (1 + abs(want)), (m["id"], key)
+    titles = [s["title"] for s in method(r, "eigen")["steps"]]
+    assert ("Handle the missing eigenvector" in titles) == defective
+
+
+def test_three_by_three_general_and_errors():
+    r = json.loads(system("y", "-x", "", "", "-z", ""))
+    m = method(r, "eigen")
+    assert all(c in m["general_latex"] for c in ("C_{1}", "C_{2}", "C_{3}", "z(t)"))
+    assert "zero real part" in r["summary"]
+    assert "linear and homogeneous" in json.loads(system("x + y", "y", "", "", "x z", ""))["error"]
+    cubic = json.loads(system("y", "z", "", "", "-x - y", ""))
+    assert cubic["ok"] and not any(m["applicable"] for m in cubic["methods"])
+    assert "x(0) and y(0) and z(0)" in json.loads(system("x", "y", "1", "", "z", ""))["error"]
+    assert json.loads(preview("x;y;z+t", "system"))["latex"].endswith("z' = t + z")
+    assert "asymptotically stable (every" in json.loads(system("-x", "-2y", "", "", "-3z", ""))["summary"]
+
+
 def test_export_fixtures():
     """Write sample outputs used by the Kotlin contract tests."""
     import os
@@ -1108,6 +1214,10 @@ def test_export_fixtures():
         fh.write(system("-x - 2y", "2x - y", "1", "1"))
     with open(os.path.join(out, "system_nonlinear.json"), "w") as fh:
         fh.write(system("x(1 - y)", "y(x - 1)"))
+    with open(os.path.join(out, "system_forced.json"), "w") as fh:
+        fh.write(system("y + t", "-x", "1", "0"))
+    with open(os.path.join(out, "system_three.json"), "w") as fh:
+        fh.write(system("y", "-x", "1", "0", "-z", "2"))
     with open(os.path.join(out, "fourier.json"), "w") as fh:
         fh.write(fourier("x", "", "pi"))
     with open(os.path.join(out, "boundary.json"), "w") as fh:
