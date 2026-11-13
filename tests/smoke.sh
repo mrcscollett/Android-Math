@@ -18,7 +18,7 @@ open() { # name equation x0 y0 tab text-to-wait-for
   # Single quotes keep the device shell from expanding * and ^.
   adb shell "am start -W -n $PKG/.MainActivity $extras" >/dev/null
   # First launch extracts Python and imports SymPy, which is slow on an emulator.
-  for i in $(seq 1 60); do
+  for i in $(seq 1 24); do
     sleep 5
     adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1
     adb exec-out cat /sdcard/ui.xml > "$OUT/$1.xml" 2>/dev/null
@@ -30,6 +30,17 @@ open() { # name equation x0 y0 tab text-to-wait-for
   adb exec-out screencap -p > "$OUT/$1.png"
   echo "--- $1: text on screen"
   grep -o 'text="[^"]\+"' "$OUT/$1.xml" | sort -u | head -60
+  echo "--- $1: foreground activity"
+  adb shell dumpsys activity activities | grep -E "ResumedActivity|topResumedActivity" | head -3
+  adb logcat -d > "$OUT/$1-logcat.txt"
+  adb logcat -c
+  if grep -qE "FATAL EXCEPTION|Fatal signal|ANR in $PKG|E Engine|E/Engine" "$OUT/$1-logcat.txt"; then
+    echo "FAIL $1: crash or engine error in the log"
+    grep -B2 -A40 -E "FATAL EXCEPTION|Fatal signal|ANR in $PKG|E Engine|E/Engine" "$OUT/$1-logcat.txt" | head -120
+    fail=1
+  else
+    echo "ok   $1 log has no crash"
+  fi
 }
 
 expect() { # name pattern
@@ -49,12 +60,4 @@ expect graph 'Numerical (RK4)'
 open input_error "dy/dx=z" "" "" 0 "Unknown symbol"
 expect input_error 'Unknown symbol'
 
-echo "--- crashes and engine errors in the log"
-adb logcat -d > "$OUT/logcat.txt"
-if grep -E "FATAL EXCEPTION|E/Engine|E Engine" "$OUT/logcat.txt"; then
-  grep -A 25 -E "FATAL EXCEPTION|Engine  *:" "$OUT/logcat.txt" | head -80
-  fail=1
-else
-  echo "none"
-fi
 exit $fail
