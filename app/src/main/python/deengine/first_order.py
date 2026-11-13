@@ -934,6 +934,18 @@ def laplace(prob, f, ic):
     steps, sol = lt.solve_ivp(prob, sp.Integer(0), sp.Integer(1), -a, q, ic[1])
     if steps is None:
         return _not_applicable("laplace", lt.NAME, sol)
+    if lt.forced(q):
+        ok = lt.check_forced(sp.diff(sol, x) - a * sol - q, x)
+        note = ("Checked numerically for \\(%s > 0\\), between the instants "
+                "where the forcing switches." % prob.indep_name) if ok else (
+            "Could not be checked automatically." if ok is None
+            else "Substituting back did not reproduce the equation.")
+        return {"id": "laplace", "name": lt.NAME, "applicable": True,
+                "reason": "Laplace transforms turn step and impulse terms into "
+                          "simple factors \\(e^{-as}\\).",
+                "steps": steps, "general_latex": None, "particular_latex": _eq("y", sol),
+                "plot": {"general_expr": None, "particular_expr": plot_expr(sol, prob)},
+                "verified": ok, "verify_note": note}
     steps.insert(0, step(
         "Write in standard form", "Move the \\(y\\) term to the left.",
         ["y' %s = %s" % (_signed_term(-a), tex(q))]))

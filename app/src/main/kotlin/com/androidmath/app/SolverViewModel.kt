@@ -22,6 +22,7 @@ enum class Mode(val title: String) {
     FirstOrder("First-order equation"),
     SecondOrder("Second-order equation"),
     Numerical("Numerical methods"),
+    Laplace("Laplace transforms"),
 }
 
 class SolverViewModel(app: Application) : AndroidViewModel(app) {
@@ -37,6 +38,9 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
     var yPrime0 by mutableStateOf("")
     var stepSize by mutableStateOf("0.1")
     var stepCount by mutableStateOf("10")
+    /** In the Laplace section: false transforms f(t), true inverts F(s). */
+    var inverse by mutableStateOf(false)
+        private set
 
     var previewLatex by mutableStateOf("")
         private set
@@ -83,7 +87,23 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
     /** True when the problem takes y'(x0) as well: the second-order section, or y'' typed elsewhere. */
     val isSecondOrder: Boolean
         get() = mode == Mode.SecondOrder ||
-            (mode != Mode.Numerical && (previewOrder == 2 || equation.text.contains("''")))
+            (mode == Mode.FirstOrder && (previewOrder == 2 || equation.text.contains("''")))
+
+    private val previewKind: String
+        get() = when {
+            mode != Mode.Laplace -> "ode"
+            inverse -> "inverse"
+            else -> "forward"
+        }
+
+    /** Switches the Laplace section between transforming and inverting. */
+    fun chooseInverse(value: Boolean) {
+        if (value == inverse) return
+        inverse = value
+        // f(t) and F(s) are different expressions, so start the field afresh.
+        equation = TextFieldValue("")
+        previewLatex = ""; previewError = null; inputError = null
+    }
 
     fun open(newMode: Mode) {
         if (newMode != mode) {
@@ -103,7 +123,7 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
         previewJob?.cancel()
         previewJob = viewModelScope.launch {
             delay(250)
-            val r = Engine.preview(getApplication(), value.text)
+            val r = Engine.preview(getApplication(), value.text, previewKind)
             previewLatex = if (r.ok) r.latex else ""
             previewError = if (r.ok) null else r.error
             if (r.ok) previewOrder = r.order
@@ -130,6 +150,8 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val (json, parsed) = if (mode == Mode.Numerical) {
                 Engine.numeric(getApplication(), equation.text, x0, y0, stepSize, stepCount)
+            } else if (mode == Mode.Laplace) {
+                Engine.transform(getApplication(), equation.text, inverse)
             } else {
                 // y'(x0) only means something for a second-order equation.
                 val slope = if (isSecondOrder || equation.text.contains("d2y")) yPrime0 else ""

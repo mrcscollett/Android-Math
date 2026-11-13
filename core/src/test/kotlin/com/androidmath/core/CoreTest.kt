@@ -39,6 +39,12 @@ class ExprTest {
         assertEquals(4.0, Expr.parseOrNull("C2**2")!!.eval(0.0, 0.0, 0.0, 2.0), 0.0)
     }
 
+    @Test fun unitStep() {
+        val e = Expr.parseOrNull("sin(x - 2)*Heaviside(x - 2)")!!
+        assertEquals(0.0, e.eval(1.0, 0.0, 0.0), 0.0)
+        assertEquals(kotlin.math.sin(1.0), e.eval(3.0, 0.0, 0.0), 1e-12)
+    }
+
     @Test fun unsupportedInputIsRejected() {
         assertNull(Expr.parseOrNull("erf(x)"))
         assertNull(Expr.parseOrNull("x +"))
@@ -222,5 +228,16 @@ class ModelTest {
         assertEquals(1.419434, pts[9], 1e-6)
         assertNotNull(Expr.parseOrNull(r.methods[0].plot!!.particularExpr))
         assertEquals(2, EngineJson.preview("""{"ok": true, "latex": "", "order": 2}""").order)
+    }
+
+    @Test fun parsesTransform() {
+        val r = EngineJson.solveResult(fixture("inverse_laplace.json"))
+        assertEquals("transform", r.kind)
+        assertNull(r.ic)
+        val m = r.applicableMethods.single()
+        assertEquals("fractions", m.id)
+        val f = Expr.parseOrNull(m.plot!!.particularExpr)!!
+        assertEquals(0.0, f.eval(1.0, 0.0, 0.0), 0.0)
+        assertEquals(kotlin.math.sin(1.0), f.eval(3.0, 0.0, 0.0), 1e-12)
     }
 }

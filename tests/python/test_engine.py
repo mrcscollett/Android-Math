@@ -344,20 +344,41 @@ def test_second_order_errors():
 def test_numeric_tables_and_accuracy():
     r = json.loads(numeric("y' = x*y", "0", "1", "0.25", "4"))
     assert r["ok"] and r["kind"] == "numeric"
-    assert [m["id"] for m in r["methods"]] == ["euler", "heun", "rk4"]
+    assert [m["id"] for m in r["methods"]] == ["euler", "heun", "rk4", "midpoint", "ab4", "rkf45"]
     exact = math.exp(0.5)
     errors = []
     for m in r["methods"]:
         pts = m["plot"]["points"]
-        assert len(pts) == 5 and pts[0] == [0.0, 1.0] and abs(pts[-1][0] - 1.0) < 1e-12
+        assert pts[0] == [0.0, 1.0] and abs(pts[-1][0] - 1.0) < 1e-12
+        if m["id"] != "rkf45":
+            assert len(pts) == 5
         errors.append(abs(pts[-1][1] - exact))
         table = next(s for s in m["steps"] if "table" in s)["table"]
-        assert len(table["rows"]) == 5
+        assert len(table["rows"]) == len(pts)
         assert all(len(row) == len(table["headers"]) for row in table["rows"])
         assert m["plot"]["particular_expr"] == "exp(x**2/2)"
     assert errors[0] > errors[1] > errors[2]
+    by_id = dict(zip([m["id"] for m in r["methods"]], errors))
+    assert by_id["midpoint"] < by_id["euler"] / 10
+    assert by_id["rkf45"] < 1e-4
     assert abs(r["methods"][0]["plot"]["points"][-1][1] - 1.419434) < 1e-6   # hand-checked Euler
     assert errors[2] < 2e-5
+
+
+def test_multistep_and_adaptive_methods():
+    r = json.loads(numeric("y' = -2y + x", "0", "1", "0.05", "40"))
+    exact = lambda x: 1.25 * math.exp(-2 * x) + x / 2 - 0.25
+    methods = {m["id"]: m for m in r["methods"]}
+    ab4 = methods["ab4"]["plot"]["points"]
+    assert len(ab4) == 41 and abs(ab4[-1][1] - exact(2.0)) < 1e-5
+    # Midpoint by hand: k1 = -2, k2 = f(0.025, 0.95) = -1.875, y1 = 1 - 0.05*1.875.
+    assert abs(methods["midpoint"]["plot"]["points"][1][1] - 0.90625) < 1e-12
+    adaptive = methods["rkf45"]["plot"]["points"]
+    assert abs(adaptive[-1][0] - 2.0) < 1e-9
+    assert abs(adaptive[-1][1] - exact(2.0)) < 1e-5
+    steps = [b[0] - a[0] for a, b in zip(adaptive, adaptive[1:])]
+    assert max(steps) > 1.5 * min(steps[:-1] or steps)   # the step size really adapts
+    assert all(abs(p[1] - exact(p[0])) < 1e-4 for p in adaptive)
 
 
 def test_numeric_without_exact_solution():
@@ -399,6 +420,153 @@ def test_numeric_errors(args, fragment):
     assert not r["ok"] and fragment in r["error"]
 
 
+# ---- phase 3: Laplace transforms ------------------------------------------
+
+from deengine import transform
+
+
+def _numeric_laplace(expr_text, s_value):
+    """Integral of e^(-s t) f(t) from 0 to infinity, computed by quadrature."""
+    f = sp.lambdify(X, sp.sympify(expr_text, locals={"x": X, "Heaviside": sp.Heaviside}),
+                    [{"Heaviside": lambda v, *rest: 0.0 if v < 0 else 1.0}, "mpmath"])
+    breaks = [0, 1, 2, 3, 5, 10, 40]
+    return mpmath.quad(lambda t: mpmath.exp(-s_value * t) * f(t), breaks)
+
+
+FORWARD = ["3", "t^2 + 2", "e^(2t) sin(3t)", "t cos(2t)", "t^3 e^(-t)",
+           "5 e^(-t) - 3 sinh(2t)", "u(t-2)", "(t-2) u(t-2)", "cos(t) + e^(-3t) t"]
+
+
+@pytest.mark.parametrize("text", FORWARD)
+def test_forward_transform_matches_quadrature(text):
+    r = json.loads(transform(text, "forward"))
+    assert r["ok"], r.get("error")
+    table = method(r, "table")
+    assert table["verified"] is True
+    answer = table["particular_latex"].split(" = ", 1)[1]
+    plot = table["plot"]["particular_expr"]
+    assert plot
+    # Recompute the transform with SymPy only to evaluate it; the reference is the integral.
+    from deengine.parsing import parse_expression
+    f, symbols = parse_expression(text, ["t"])
+    s = sp.Symbol("s")
+    F = sp.laplace_transform(f, symbols["t"], s, noconds=True)
+    for s_value in (4.0, 6.5):
+        reference = _numeric_laplace(plot, s_value)
+        assert abs(complex(F.subs(s, s_value)) - reference) < 1e-6 * (1 + abs(reference))
+    assert answer
+
+
+def test_forward_methods_and_rules():
+    r = json.loads(transform("e^(2t) sin(3t)"))
+    assert [m["id"] for m in r["methods"]] == ["table", "definition"]
+    assert all(m["applicable"] for m in r["methods"])
+    assert "First shifting theorem" in method(r, "table")["steps"][0]["text"]
+    assert "\\frac{3}{s^{2} - 4 s + 13}" in method(r, "definition")["particular_latex"]
+    step_fn = json.loads(transform("u(t-2)"))
+    assert method(step_fn, "definition")["applicable"] is False
+    assert "u\\left(t - 2\\right)" in step_fn["input_latex"]
+
+
+INVERSE = ["1/(s(s+1))", "(s+3)/(s^2+2s+5)", "1/(s-1)^3", "e^(-2s)/(s^2+1)",
+           "e^(-s)/s + 1/(s+2)", "(2s+1)/((s-1)(s^2+4))", "1/(s^2+1)^2", "1/(s^2 - 4)"]
+
+
+@pytest.mark.parametrize("text", INVERSE)
+def test_inverse_transform_matches_quadrature(text):
+    r = json.loads(transform(text, "inverse"))
+    assert r["ok"], r.get("error")
+    from deengine.parsing import parse_expression
+    F, symbols = parse_expression(text, ["s"])
+    answers = []
+    for m in r["methods"]:
+        if not m["applicable"]:
+            continue
+        assert m["verified"] is True
+        for s_value in (4.0, 6.5):
+            got = _numeric_laplace(m["plot"]["particular_expr"], s_value)
+            want = complex(F.subs(symbols["s"], s_value))
+            assert abs(got - want) < 1e-6 * (1 + abs(want)), (m["id"], got, want)
+        answers.append(m["id"])
+    assert "fractions" in answers
+
+
+def test_inverse_steps():
+    r = json.loads(transform("(2s+1)/((s-1)(s^2+4))", "inverse"))
+    titles = [s["title"] for s in method(r, "fractions")["steps"]]
+    assert titles[:2] == ["Split into partial fractions", "Invert each piece"]
+    assert method(r, "convolution")["applicable"]
+    delayed = json.loads(transform("e^(-2s)/(s^2+1)", "inverse"))
+    assert "Apply the delay" in [s["title"] for s in method(delayed, "fractions")["steps"]]
+    assert method(delayed, "convolution")["applicable"] is False
+    assert "e^{- t} \\cos" in json.loads(transform("(s+3)/(s^2+2s+5)", "inverse"))["methods"][0]["particular_latex"]
+
+
+def test_transform_errors_and_preview():
+    assert "Unknown symbol 'y'" in json.loads(transform("y + 1"))["error"]
+    assert "without an = sign" in json.loads(transform("t = 1"))["error"]
+    assert "could not be found" in json.loads(transform("1/t"))["error"]
+    assert "rational functions" in json.loads(transform("sin(s)/(e^s + 1)", "inverse"))["error"]
+    assert json.loads(preview("1/(s^2+1)", "inverse"))["latex"].startswith("\\mathcal{L}^{-1}")
+    assert json.loads(preview("t^2", "forward"))["ok"]
+
+
+# (equation, y0, y'0 or "", x to compare at)
+FORCED = [
+    ("y'' + y = u(t-2)", "0", "0", 5.0),
+    ("y'' + 4y = u(t-1) - u(t-2)", "1", "0", 4.0),
+    ("y' + y = u(t-1)", "2", "", 3.0),
+    ("y'' + 3y' + 2y = u(t-1)", "0", "1", 3.5),
+]
+
+
+@pytest.mark.parametrize("text,y0,y1,x1", FORCED)
+def test_step_forcing_matches_numerical_solution(text, y0, y1, x1):
+    r = json.loads(solve(text, "0", y0, y1))
+    assert r["ok"], r.get("error")
+    assert [m["id"] for m in r["methods"] if m["applicable"]] == ["laplace"]
+    m = method(r, "laplace")
+    assert m["verified"] is True
+    expr = sp.sympify(m["plot"]["particular_expr"], locals={"x": X})
+    got = float(expr.subs(X, x1))
+    step = lambda v, *rest: 0.0 if v < 0 else 1.0
+    from deengine.parsing import parse_equation
+    prob, lhs, rhs = parse_equation(text)
+    if y1:
+        from deengine.second_order import analyse
+        eq = analyse(prob, lhs, rhs)
+        rhs_fn = sp.lambdify((prob.x, prob.y, prob.yp), (eq.g - eq.b * prob.yp - eq.c * prob.y) / eq.a,
+                             [{"Heaviside": step}, "math"])
+        state = [float(y0), float(y1)]
+        deriv = lambda t, v: [v[1], rhs_fn(t, v[0], v[1])]
+    else:
+        f = sp.solve(lhs - rhs, prob.yp)[0]
+        rhs_fn = sp.lambdify((prob.x, prob.y), f, [{"Heaviside": step}, "math"])
+        state = [float(y0)]
+        deriv = lambda t, v: [rhs_fn(t, v[0])]
+    # Plain RK4 with a small step: adaptive integrators dislike the jumps.
+    t, h = 0.0, 0.0005
+    while t < x1 - 1e-12:
+        k1 = deriv(t, state)
+        k2 = deriv(t + h / 2, [a + h / 2 * b for a, b in zip(state, k1)])
+        k3 = deriv(t + h / 2, [a + h / 2 * b for a, b in zip(state, k2)])
+        k4 = deriv(t + h, [a + h * b for a, b in zip(state, k3)])
+        state = [a + h / 6 * (p + 2 * q + 2 * u + w) for a, p, q, u, w in zip(state, k1, k2, k3, k4)]
+        t += h
+    assert abs(got - state[0]) < 1e-4, (got, state[0])
+
+
+def test_impulse_forcing():
+    r = json.loads(solve("y'' + 2y' + 5y = delta(t-1)", "0", "0", "0"))
+    m = method(r, "laplace")
+    assert m["applicable"] and m["verified"] is True
+    expr = sp.sympify(m["plot"]["particular_expr"], locals={"x": X})
+    assert float(expr.subs(X, 0.5)) == 0.0
+    # After the impulse: e^{-(t-1)} sin(2(t-1)) / 2.
+    assert abs(float(expr.subs(X, 1.5)) - math.exp(-0.5) * math.sin(1.0) / 2) < 1e-12
+    assert "initial condition" in json.loads(solve("y' + y = u(t-1)"))["error"]
+
+
 def test_export_fixtures():
     """Write sample outputs used by the Kotlin contract tests."""
     import os
@@ -417,3 +585,5 @@ def test_export_fixtures():
             fh.write(solve(*args))
     with open(os.path.join(out, "numeric.json"), "w") as fh:
         fh.write(numeric("y' = x*y", "0", "1", "0.25", "4"))
+    with open(os.path.join(out, "inverse_laplace.json"), "w") as fh:
+        fh.write(transform("e^(-2s)/(s^2+1)", "inverse"))

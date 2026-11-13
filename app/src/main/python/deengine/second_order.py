@@ -356,6 +356,10 @@ def variation(eq, ic):
                                "It needs two known solutions of the homogeneous "
                                "equation; those are found here only for "
                                "constant coefficients.")
+    if eq.g.has(sp.Heaviside, sp.DiracDelta):
+        return _not_applicable("variation", name,
+                               "Step and impulse forcing is handled here by "
+                               "Laplace transforms.")
     if eq.g == 0:
         return _not_applicable("variation", name,
                                "The right-hand side is 0, so no particular "
@@ -506,6 +510,20 @@ def laplace(eq, ic):
     steps, sol = lt.solve_ivp(eq.prob, eq.a, eq.b, eq.c, eq.g, ic[1], ic[2])
     if steps is None:
         return _not_applicable("laplace", lt.NAME, sol)
+    if lt.forced(eq.g):
+        out = _package("laplace", lt.NAME,
+                       "Laplace transforms turn the step and impulse terms into "
+                       "simple factors \\(e^{-as}\\), which the other methods "
+                       "cannot handle directly.", steps, eq, None, None, ic)
+        ok = lt.check_forced(eq.residual(sol), eq.x)
+        out["particular_latex"] = _eq("y", sol)
+        out["plot"]["particular_expr"] = plot_expr(sol, eq.prob)
+        out["verified"] = ok
+        out["verify_note"] = ("Checked numerically for \\(%s > 0\\), between the "
+                              "instants where the forcing switches." % eq.xn) if ok else (
+            "Could not be checked automatically." if ok is None
+            else "Substituting back did not reproduce the equation.")
+        return out
     return _package("laplace", lt.NAME,
                     "The equation is linear with constant coefficients and the "
                     "initial conditions are given at 0.",

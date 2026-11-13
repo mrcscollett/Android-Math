@@ -3,7 +3,7 @@ import json
 
 import sympy as sp
 
-from . import first_order, numeric as numeric_methods, second_order
+from . import first_order, numeric as numeric_methods, second_order, transforms
 from .parsing import InputError, parse_equation, parse_number
 from .util import dydx, plot_expr, tex, tex_side
 
@@ -16,11 +16,26 @@ def warmup():
     return "ok"
 
 
-def preview(text):
-    """Render what the user has typed so far."""
+def transform(text, direction="forward"):
+    """Laplace transform of f(t) ("forward") or inverse transform of F(s) ("inverse")."""
+    work = transforms.inverse if direction == "inverse" else transforms.forward
+    return _guard(lambda: work(text))
+
+
+def preview(text, kind="ode"):
+    """Render what the user has typed so far.
+
+    kind is "ode" for an equation, "forward" for f(t), "inverse" for F(s).
+    """
     try:
         if not text.strip():
             return json.dumps({"ok": True, "latex": "", "order": 1})
+        if kind in ("forward", "inverse"):
+            from .parsing import parse_expression
+            expr, _ = parse_expression(text, ["s" if kind == "inverse" else "t"])
+            wrap = "\\mathcal{L}^{-1}\\left\\{%s\\right\\}" if kind == "inverse" \
+                else "\\mathcal{L}\\left\\{%s\\right\\}"
+            return json.dumps({"ok": True, "order": 0, "latex": wrap % tex(expr)})
         prob, lhs, rhs = parse_equation(text)
         return json.dumps({"ok": True, "order": prob.order,
                            "latex": "%s = %s" % (tex_side(lhs, prob), tex_side(rhs, prob))})
@@ -131,7 +146,15 @@ def _solve(text, x0_text, y0_text, y1_text):
     if ic:
         _check_point(prob, f, ic)
 
-    methods = _run_methods(first_order.METHODS, prob, f, ic)
+    if f.has(sp.Heaviside, sp.DiracDelta):
+        # Step or impulse forcing: only the Laplace method is set up for it.
+        methods = _run_methods((first_order.laplace,), prob, f, ic)
+        if not ic and not methods[0]["applicable"]:
+            raise InputError("Equations with a step u(...) or impulse delta(...) "
+                             "are solved by Laplace transforms, which need an "
+                             "initial condition at %s = 0." % xn)
+    else:
+        methods = _run_methods(first_order.METHODS, prob, f, ic)
 
     prelude = None
     if not already_normal:

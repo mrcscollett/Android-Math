@@ -78,7 +78,9 @@ def solve_ivp(prob, a, b, c, g, y0, y1=None):
         lambda: sp.inverse_laplace_transform(parts, s, x), TIMEOUT, None)
     if y is None or y.has(sp.InverseLaplaceTransform) or y.has(sp.DiracDelta):
         return None, "The inverse Laplace transform could not be found."
-    y = y.replace(lambda e: isinstance(e, sp.Heaviside), lambda e: sp.Integer(1))
+    # u(t) is 1 for t >= 0; shifted steps u(t - a) are part of the answer.
+    y = y.replace(lambda e: isinstance(e, sp.Heaviside) and e.args[0] == x,
+                  lambda e: sp.Integer(1))
     y = sp.expand(y)
     if y.has(sp.I):
         y = sp.simplify(sp.re(sp.expand_complex(y)))
@@ -119,3 +121,27 @@ def why_not(prob, constant, ic):
                 "method is set up for conditions at 0."
                 % (prob.indep_name, tex(ic[0])))
     return None
+
+
+def forced(expr):
+    """True when the forcing contains a unit step or an impulse."""
+    return expr.has(sp.Heaviside, sp.DiracDelta)
+
+
+def check_forced(residual, x):
+    """Numerical check for t > 0, away from the instants where the forcing jumps."""
+    import random
+    rng = random.Random(11)
+    good = 0
+    for _ in range(60):
+        point = sp.Float(rng.uniform(0.05, 8.0))
+        try:
+            value = complex(residual.evalf(subs={x: point}))
+        except Exception:
+            continue
+        if value != value or abs(value) == float("inf"):
+            continue
+        if abs(value) > 1e-6:
+            return False
+        good += 1
+    return True if good >= 6 else None

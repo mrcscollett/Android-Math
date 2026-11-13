@@ -36,9 +36,10 @@ object Engine {
         }
     }
 
-    suspend fun preview(context: Context, text: String): PreviewResult = withContext(dispatcher) {
+    /** [kind] is "ode" for an equation, "forward" for f(t), "inverse" for F(s). */
+    suspend fun preview(context: Context, text: String, kind: String): PreviewResult = withContext(dispatcher) {
         try {
-            EngineJson.preview(module(context).callAttr("preview", text).toString())
+            EngineJson.preview(module(context).callAttr("preview", text, kind).toString())
         } catch (e: Throwable) {
             PreviewResult(ok = false, error = "The solver could not start.")
         }
@@ -53,6 +54,10 @@ object Engine {
     suspend fun numeric(
         context: Context, text: String, x0: String, y0: String, step: String, count: String,
     ): Pair<String, SolveResult> = call(context, "numeric", text, x0, y0, step, count)
+
+    /** Laplace transform of f(t), or the inverse transform of F(s). */
+    suspend fun transform(context: Context, text: String, inverse: Boolean): Pair<String, SolveResult> =
+        call(context, "transform", text, if (inverse) "inverse" else "forward")
 
     private suspend fun call(
         context: Context, function: String, vararg args: String,

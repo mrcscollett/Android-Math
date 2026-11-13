@@ -90,4 +90,20 @@ open numeric_graph "dy/dx=x*y" 0 1 1 'text="Graph"' "--es mode numeric --es h 0.
 expect numeric_graph 'Exact solution'
 expect numeric_graph 'text="Euler"'
 
+open forced "d2y/dt2+y=u(t-2)" 0 0 0 'text="Steps"' "--es mode second --es yp0 0"
+expect forced 'text="Laplace transform"'
+expect forced 'Transform back'
+
+open laplace "e^(2*t)*sin(3*t)" "" "" 0 'text="Steps"' "--es mode laplace"
+expect laplace 'text="Transform"'
+expect laplace 'text="Table and rules"'
+expect laplace 'First shifting theorem'
+
+open inverse "1/(s*(s+1))" "" "" 0 'text="Steps"' "--es mode inverse"
+expect inverse 'text="Partial fractions and table"'
+expect inverse 'Split into partial fractions'
+
+open inverse_graph "e^(-2*s)/(s^2+1)" "" "" 1 'text="Graph"' "--es mode inverse"
+expect inverse_graph 'Function of t'
+
 exit $fail

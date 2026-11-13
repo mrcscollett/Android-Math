@@ -26,6 +26,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
@@ -50,6 +51,23 @@ private val KEYS = listOf(
     "e^(", "sin(", "cos(", "tan(", "ln(", "sqrt(", "pi",
 )
 
+private val KEYS_T = listOf(
+    "t", "^", "(", ")", "*", "/", "+", "-",
+    "e^(", "sin(", "cos(", "sinh(", "cosh(", "sqrt(", "u(", "delta(", "pi",
+)
+
+private val KEYS_S = listOf("s", "^", "(", ")", "*", "/", "+", "-", "e^(-", "sqrt(", "pi")
+
+private val FORWARD_EXAMPLES = listOf(
+    Example("e^(2t) sin(3t)"), Example("t cos(2t)"), Example("t^2 + 2"),
+    Example("(t-2) u(t-2)"), Example("5 e^(-t) - 3 sinh(2t)"),
+)
+
+private val INVERSE_EXAMPLES = listOf(
+    Example("1/(s(s+1))"), Example("(s+3)/(s^2+2s+5)"), Example("(2s+1)/((s-1)(s^2+4))"),
+    Example("e^(-2s)/(s^2+1)"), Example("1/(s^2+1)^2"),
+)
+
 /** An example problem: equation, x0, y0 and (for second order) y'(x0). */
 private data class Example(val equation: String, val x0: String = "", val y0: String = "", val slope: String = "")
 
@@ -70,6 +88,7 @@ private val SECOND_ORDER_EXAMPLES = listOf(
     Example("y'' + y = sin(x)", "0", "0", "0"),
     Example("y'' + y = tan(x)"),
     Example("x^2 y'' + x y' - y = 0", "1", "2", "0"),
+    Example("y'' + y = u(t-2)", "0", "0", "0"),
 )
 
 private val NUMERICAL_EXAMPLES = listOf(
@@ -106,13 +125,43 @@ fun InputScreen(model: SolverViewModel) {
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp),
         ) {
+            val laplace = model.mode == Mode.Laplace
+            if (laplace) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = !model.inverse,
+                        onClick = { model.chooseInverse(false) },
+                        label = { Text("Transform f(t)") },
+                    )
+                    FilterChip(
+                        selected = model.inverse,
+                        onClick = { model.chooseInverse(true) },
+                        label = { Text("Inverse of F(s)") },
+                    )
+                }
+            }
             OutlinedTextField(
                 value = model.equation,
                 onValueChange = model::onEquationChange,
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("Equation") },
+                label = {
+                    Text(
+                        when {
+                            !laplace -> "Equation"
+                            model.inverse -> "F(s)"
+                            else -> "f(t)"
+                        }
+                    )
+                },
                 placeholder = {
-                    Text(if (model.mode == Mode.SecondOrder) "y'' + 3y' + 2y = e^x" else "y' + 2y = x")
+                    Text(
+                        when {
+                            laplace && model.inverse -> "1/(s(s+1))"
+                            laplace -> "e^(2t) sin(3t)"
+                            model.mode == Mode.SecondOrder -> "y'' + 3y' + 2y = e^x"
+                            else -> "y' + 2y = x"
+                        }
+                    )
                 },
                 singleLine = true,
                 textStyle = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Monospace),
@@ -132,7 +181,12 @@ fun InputScreen(model: SolverViewModel) {
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                for (key in KEYS) {
+                val keys = when {
+                    !laplace -> KEYS
+                    model.inverse -> KEYS_S
+                    else -> KEYS_T
+                }
+                for (key in keys) {
                     FilledTonalButton(
                         onClick = { model.insert(key) },
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp),
@@ -148,7 +202,8 @@ fun InputScreen(model: SolverViewModel) {
                     val error = model.previewError
                     val hint = when {
                         error != null -> ""
-                        model.engineReady -> "Your equation appears here as you type"
+                        model.engineReady -> if (laplace) "Your expression appears here as you type"
+                        else "Your equation appears here as you type"
                         else -> "Starting the solver\u2026"
                     }
                     MathWebView(
@@ -166,33 +221,35 @@ fun InputScreen(model: SolverViewModel) {
                 }
             }
 
-            val numerical = model.mode == Mode.Numerical
-            val second = model.isSecondOrder
-            Text(
-                when {
-                    numerical -> "Starting point"
-                    second -> "Initial conditions (optional)"
-                    else -> "Initial condition (optional)"
-                },
-                style = MaterialTheme.typography.labelLarge,
-                modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                NumberField(model.x0, { model.x0 = it }, "x\u2080")
-                NumberField(model.y0, { model.y0 = it }, "y(x\u2080)")
-                if (second) {
-                    NumberField(model.yPrime0, { model.yPrime0 = it }, "y'(x\u2080)")
-                }
-            }
-            if (numerical) {
+            if (!laplace) {
+                val numerical = model.mode == Mode.Numerical
+                val second = model.isSecondOrder
                 Text(
-                    "Step size and number of steps",
+                    when {
+                        numerical -> "Starting point"
+                        second -> "Initial conditions (optional)"
+                        else -> "Initial condition (optional)"
+                    },
                     style = MaterialTheme.typography.labelLarge,
                     modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    NumberField(model.stepSize, { model.stepSize = it }, "h")
-                    NumberField(model.stepCount, { model.stepCount = it }, "steps")
+                    NumberField(model.x0, { model.x0 = it }, "x\u2080")
+                    NumberField(model.y0, { model.y0 = it }, "y(x\u2080)")
+                    if (second) {
+                        NumberField(model.yPrime0, { model.yPrime0 = it }, "y'(x\u2080)")
+                    }
+                }
+                if (numerical) {
+                    Text(
+                        "Step size and number of steps",
+                        style = MaterialTheme.typography.labelLarge,
+                        modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        NumberField(model.stepSize, { model.stepSize = it }, "h")
+                        NumberField(model.stepCount, { model.stepCount = it }, "steps")
+                    }
                 }
             }
 
@@ -215,7 +272,13 @@ fun InputScreen(model: SolverViewModel) {
                     Spacer(Modifier.width(8.dp))
                     Text(if (model.engineReady) "Solving…" else "Starting the solver…")
                 } else {
-                    Text(if (model.mode == Mode.Numerical) "Compute step by step" else "Solve step by step")
+                    Text(
+                        when (model.mode) {
+                            Mode.Numerical -> "Compute step by step"
+                            Mode.Laplace -> "Transform step by step"
+                            else -> "Solve step by step"
+                        }
+                    )
                 }
             }
 
@@ -232,6 +295,7 @@ fun InputScreen(model: SolverViewModel) {
                     Mode.FirstOrder -> FIRST_ORDER_EXAMPLES
                     Mode.SecondOrder -> SECOND_ORDER_EXAMPLES
                     Mode.Numerical -> NUMERICAL_EXAMPLES
+                    Mode.Laplace -> if (model.inverse) INVERSE_EXAMPLES else FORWARD_EXAMPLES
                 }
                 for (example in examples) {
                     AssistChip(
@@ -256,8 +320,14 @@ fun InputScreen(model: SolverViewModel) {
                 }
             }
             Text(
-                "Write derivatives as y' and y'' (or dy/dx). Use ^ for powers and * or a space " +
-                    "between a variable and a function, as in x*sin(x).",
+                if (laplace) {
+                    "Use u(t-a) for a unit step switched on at t = a and delta(t-a) for an " +
+                        "impulse. A delay in F(s) is written e^(-a s)."
+                } else {
+                    "Write derivatives as y' and y'' (or dy/dx). Use ^ for powers and * or a " +
+                        "space between a variable and a function, as in x*sin(x). Step and " +
+                        "impulse forcing is written u(t-a) and delta(t-a)."
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 12.dp, bottom = 24.dp),

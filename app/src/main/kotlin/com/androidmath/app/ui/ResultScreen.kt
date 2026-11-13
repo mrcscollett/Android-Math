@@ -49,7 +49,15 @@ fun ResultScreen(model: SolverViewModel) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(if (numeric) "Approximation" else "Solution") },
+                title = {
+                    Text(
+                        when (result.kind) {
+                            "numeric" -> "Approximation"
+                            "transform" -> "Transform"
+                            else -> "Solution"
+                        }
+                    )
+                },
                 navigationIcon = { TextButton(onClick = { model.back() }) { Text("Edit") } },
             )
         },
@@ -61,7 +69,11 @@ fun ResultScreen(model: SolverViewModel) {
             Column(Modifier.widthIn(max = CONTENT_WIDTH).fillMaxWidth()) {
                 if (methods.size > 1) {
                     Text(
-                        if (numeric) "Compare ${methods.size} methods" else "${methods.size} ways to solve this",
+                        when (result.kind) {
+                            "numeric" -> "Compare ${methods.size} methods"
+                            "transform" -> "${methods.size} ways to find this"
+                            else -> "${methods.size} ways to solve this"
+                        },
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(start = 16.dp, top = 4.dp),
@@ -125,7 +137,10 @@ private fun GraphTab(model: SolverViewModel) {
         Box(Modifier.weight(1f).fillMaxWidth()) {
             if (rhs == null && exact == null && points == null) {
                 Text(
-                    if (result.order == 2 || method != null) {
+                    if (result.kind == "transform") {
+                        "This function cannot be graphed (it contains an impulse or a " +
+                            "function the grapher does not support)."
+                    } else if (result.order == 2 || method != null) {
                         "There is no formula to graph for this method. Its solution is " +
                             "left in implicit or integral form."
                     } else {
@@ -163,7 +178,10 @@ private fun GraphTab(model: SolverViewModel) {
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (exact != null) {
-                    Legend(MaterialTheme.colorScheme.primary, "Exact solution")
+                    Legend(
+                        MaterialTheme.colorScheme.primary,
+                        if (result.kind == "transform") "Function of t" else "Exact solution",
+                    )
                     Spacer(Modifier.width(16.dp))
                 }
                 if (points != null) {

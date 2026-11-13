@@ -82,6 +82,96 @@ def _rk4(fn, x, y, h):
     return y + h * (k1 + 2 * k2 + 2 * k3 + k4) / 6, (k1, k2, k3, k4)
 
 
+def _midpoint(fn, x, y, h):
+    k1 = fn(x, y)
+    k2 = fn(x + h / 2, y + h * k1 / 2)
+    return y + h * k2, (k1, k2)
+
+
+def _ab4_runner(fn, x0, y0, h, n):
+    """Adams-Bashforth 4-step, started with three RK4 steps."""
+    rows, note = [], None
+    x, y = x0, y0
+    history = []
+    for i in range(n + 1):
+        if i == n:
+            rows.append((i, x, y, None))
+            break
+        try:
+            f_now = fn(x, y)
+            history.append(f_now)
+            if len(history) < 4:
+                y_next, _ = _rk4(fn, x, y, h)
+            else:
+                f0, f1, f2, f3 = history[-1], history[-2], history[-3], history[-4]
+                y_next = y + h * (55 * f0 - 59 * f1 + 37 * f2 - 9 * f3) / 24
+            if not math.isfinite(y_next) or abs(y_next) > 1e150:
+                raise OverflowError
+        except (ValueError, ZeroDivisionError, OverflowError, TypeError):
+            rows.append((i, x, y, None))
+            note = ("The method stopped at step %d: the next value is undefined "
+                    "or too large (the solution may blow up there)." % i)
+            break
+        rows.append((i, x, y, (f_now,)))
+        x, y = x0 + (i + 1) * h, y_next
+    return rows, note
+
+
+TOLERANCE = 1e-6
+
+
+def _rkf45_runner(fn, x0, y0, h, n):
+    """Runge-Kutta-Fehlberg with step-size control, from x0 to x0 + n h."""
+    rows, note = [], None
+    end = x0 + n * h
+    direction = 1.0 if h > 0 else -1.0
+    step_size = h
+    x, y = x0, y0
+    i = 0
+    while (end - x) * direction > 1e-12 * max(1.0, abs(end)):
+        if i >= MAX_STEPS:
+            note = "Stopped after %d steps without reaching the end point." % MAX_STEPS
+            break
+        if (x + step_size - end) * direction > 0:
+            step_size = end - x
+        try:
+            k1 = fn(x, y)
+            k2 = fn(x + step_size / 4, y + step_size * k1 / 4)
+            k3 = fn(x + 3 * step_size / 8, y + step_size * (3 * k1 + 9 * k2) / 32)
+            k4 = fn(x + 12 * step_size / 13,
+                    y + step_size * (1932 * k1 - 7200 * k2 + 7296 * k3) / 2197)
+            k5 = fn(x + step_size, y + step_size * (439 * k1 / 216 - 8 * k2
+                                                     + 3680 * k3 / 513 - 845 * k4 / 4104))
+            k6 = fn(x + step_size / 2, y + step_size * (-8 * k1 / 27 + 2 * k2 - 3544 * k3 / 2565
+                                                         + 1859 * k4 / 4104 - 11 * k5 / 40))
+            y4 = y + step_size * (25 * k1 / 216 + 1408 * k3 / 2565 + 2197 * k4 / 4104 - k5 / 5)
+            y5 = y + step_size * (16 * k1 / 135 + 6656 * k3 / 12825 + 28561 * k4 / 56430
+                                  - 9 * k5 / 50 + 2 * k6 / 55)
+            error = abs(y5 - y4)
+            if not math.isfinite(y5) or abs(y5) > 1e150:
+                raise OverflowError
+        except (ValueError, ZeroDivisionError, OverflowError, TypeError):
+            if abs(step_size) > 1e-10:
+                step_size /= 4
+                continue
+            note = ("The method stopped near %s: the solution is undefined or "
+                    "blows up there." % fmt(x))
+            break
+        allowed = TOLERANCE * max(1.0, abs(y))
+        if error <= allowed or abs(step_size) < 1e-10:
+            rows.append((i, x, y, (step_size, error)))
+            x, y = x + step_size, y5
+            i += 1
+        factor = 4.0 if error == 0 else min(4.0, max(0.1, 0.84 * (allowed / error) ** 0.25))
+        step_size *= factor
+    rows.append((i, x, y, None))
+    return rows, note
+
+
+_ab4_runner.columns = ["f_n"]
+_rkf45_runner.columns = ["h_n", "\\text{error est.}"]
+
+
 _SPECS = [
     ("euler", "Euler", _euler,
      "Follows the slope at the start of each step. Simple, but the error is "
@@ -102,6 +192,28 @@ _SPECS = [
       "k_4 = f(x_n + h,\\ y_n + h\\,k_3)",
       "y_{n+1} = y_n + \\tfrac{h}{6}\\,(k_1 + 2k_2 + 2k_3 + k_4)"],
      ["k_1", "k_2", "k_3", "k_4"]),
+    ("midpoint", "Midpoint (RK2)", _midpoint,
+     "Takes a half step to estimate the slope at the middle of the interval "
+     "and uses that slope for the whole step. The error is proportional to \\(h^2\\).",
+     ["k_1 = f(x_n, y_n)", "k_2 = f(x_n + \\tfrac{h}{2},\\ y_n + \\tfrac{h}{2}k_1)",
+      "y_{n+1} = y_n + h\\,k_2"],
+     ["k_1", "k_2"]),
+    ("ab4", "Adams\u2013Bashforth (4-step)", _ab4_runner,
+     "A multistep method: it reuses the slopes from the last four points "
+     "instead of sampling new ones, so each step costs one evaluation of "
+     "\\(f\\). The first three steps are taken with RK4 to get it started. "
+     "The error is proportional to \\(h^4\\).",
+     ["f_n = f(x_n, y_n)",
+      "y_{n+1} = y_n + \\tfrac{h}{24}\\,(55f_n - 59f_{n-1} + 37f_{n-2} - 9f_{n-3})"],
+     []),
+    ("rkf45", "Adaptive RK45 (Fehlberg)", _rkf45_runner,
+     "Computes a fourth- and a fifth-order estimate from the same six slopes. "
+     "Their difference estimates the error, and the step size is shrunk or "
+     "grown to keep it below a tolerance of \\(10^{-6}\\). Your \\(h\\) is "
+     "only the first trial step.",
+     ["\\text{error} \\approx |y^{(5)}_{n+1} - y^{(4)}_{n+1}|",
+      "h_{\\text{new}} = 0.84\\,h\\left(\\frac{\\text{tolerance}}{\\text{error}}\\right)^{1/4}"],
+     []),
 ]
 
 
@@ -138,12 +250,19 @@ def solve(prob, f, ic, h, n, input_latex):
 
     methods = []
     for method_id, name, stepper, about, formula, slope_names in _SPECS:
-        rows, note = _run(stepper, fn, x0, y0, h, usable)
+        custom = hasattr(stepper, "columns")
+        if custom:
+            rows, note = stepper(fn, x0, y0, h, usable)
+        else:
+            rows, note = _run(stepper, fn, x0, y0, h, usable)
         if blow_up is not None and note is None:
             note = ("The exact solution blows up near \\(%s = %s\\), so the "
                     "table stops before that point. No step-by-step method "
                     "can follow a solution through a blow-up." % (xn, fmt(blow_up)))
-        slope_headers = ["f(%s_n, y_n)" % xn] if method_id == "euler" else slope_names
+        if custom:
+            slope_headers = stepper.columns
+        else:
+            slope_headers = ["f(%s_n, y_n)" % xn] if method_id == "euler" else slope_names
         headers = ["n", "%s_n" % xn, "y_n"] + slope_headers
         if exact_fn is not None:
             headers += ["\\text{exact}", "\\text{error}"]
@@ -160,7 +279,7 @@ def solve(prob, f, ic, h, n, input_latex):
                       [f_line.replace("x_n", "%s_n" % xn) for f_line in formula]
                       + ["f(%s, y) = %s,\\qquad h = %s,\\qquad (%s_0, y_0) = (%s, %s)"
                          % (xn, tex(f), fmt(h), xn, fmt(x0), fmt(y0))])]
-        if len(rows) > 1 and rows[0][3]:
+        if len(rows) > 1 and rows[0][3] and not custom:
             slopes = rows[0][3]
             lines = ["%s = %s" % (label.split(" = ")[0] if method_id != "euler" else "f(%s_0, y_0)" % xn, fmt(k))
                      for label, k in zip(slope_names, slopes)]
@@ -197,7 +316,7 @@ def solve(prob, f, ic, h, n, input_latex):
         })
 
     summary = ("Numerical solution with step size %s over %d steps. Switch "
-               "between the three methods to compare them." % (fmt(h), n))
+               "between the methods to compare them." % (fmt(h), n))
     if exact_fn is not None:
         summary += " The exact solution is known, so each table shows the error."
     if blow_up is not None:

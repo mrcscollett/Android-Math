@@ -8,7 +8,7 @@ from sympy.printing.latex import LatexPrinter
 # Functions the Kotlin plot evaluator understands (SymPy class name -> ok).
 _PLOT_FUNCS = {
     "sin", "cos", "tan", "sec", "csc", "cot", "asin", "acos", "atan",
-    "sinh", "cosh", "tanh", "exp", "log", "Abs",
+    "sinh", "cosh", "tanh", "exp", "log", "Abs", "Heaviside",
 }
 
 
@@ -23,6 +23,11 @@ class _Printer(LatexPrinter):
                 return r"\ln\left|%s\right|" % inner
             return r"\ln^{%s}\left|%s\right|" % (exp, inner)
         return super()._print_log(expr, exp)
+
+    def _print_Heaviside(self, expr, exp=None):
+        """The unit step is written u(t - a), as in most ODE textbooks."""
+        out = r"u\left(%s\right)" % self._print(expr.args[0])
+        return out if exp is None else r"%s^{%s}" % (out, exp)
 
 
 def tex(expr):

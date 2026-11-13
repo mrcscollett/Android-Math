@@ -44,7 +44,12 @@ private val SECTIONS = listOf(
         "Euler, improved Euler and Runge\u2013Kutta with step tables and error",
         Mode.Numerical,
     ),
-    Section("Laplace transform tools", "Transform tables, step and impulse forcing, convolution", null),
+    Section(
+        "Laplace transforms",
+        "Transforms and inverse transforms: partial fractions, shifting theorems, " +
+            "steps and impulses, convolution",
+        Mode.Laplace,
+    ),
     Section("Systems", "Eigenvalue method, phase portraits, linearization", null),
     Section("Series and PDEs", "Power series, Fourier series, heat and wave equations", null),
     Section("Physics 1", "Motion, drag, springs, pendulums, cooling", null),

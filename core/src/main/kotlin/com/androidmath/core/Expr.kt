@@ -34,6 +34,8 @@ private val FUNCTIONS: Map<String, (Double) -> Double> = mapOf(
     "asin" to ::asin, "acos" to ::acos, "atan" to ::atan,
     "sinh" to ::sinh, "cosh" to ::cosh, "tanh" to ::tanh,
     "exp" to ::exp, "log" to ::ln, "sqrt" to ::sqrt, "Abs" to ::abs,
+    // Unit step, used by solutions with switched forcing.
+    "Heaviside" to { v -> if (v < 0) 0.0 else 1.0 },
 )
 
 private class Parser(private val src: String) {

@@ -34,6 +34,8 @@ _FUNCTIONS = {
     "sinh": sp.sinh, "cosh": sp.cosh, "tanh": sp.tanh,
     "exp": sp.exp, "ln": sp.log, "log": sp.log,
     "sqrt": sp.sqrt, "abs": sp.Abs,
+    # Unit step u(t - a) and impulse delta(t - a), used with Laplace transforms.
+    "u": sp.Heaviside, "delta": sp.DiracDelta,
 }
 _CONSTANTS = {"pi": sp.pi}
 
@@ -104,10 +106,11 @@ def _check_identifiers(text, variables):
         )
 
 
-def _parse_side(text, prob, allow_vars=True):
+def _parse_side(text, prob, allow_vars=True, variables=None):
     if not text.strip():
         raise InputError("One side of the equation is empty.")
-    variables = {prob.indep_name, "y", _PRIME, _PRIME2, "e"} if allow_vars else {"e"}
+    if variables is None:
+        variables = {prob.indep_name, "y", _PRIME, _PRIME2, "e"} if allow_vars else {"e"}
     _check_identifiers(text, variables)
     if re.search(r"(?<![0-9])\.(?![0-9])", text):
         raise InputError("A decimal point needs a digit next to it.")
@@ -181,3 +184,35 @@ def parse_number(text, label):
     if value.free_symbols or value.is_real is not True or not value.is_finite:
         raise InputError("%s must be a real number." % label)
     return sp.nsimplify(value) if value.is_Float else value
+
+
+def parse_expression(text, names):
+    """Parse an expression (no = sign) in the given variable names.
+
+    Returns (expr, symbols) where symbols maps each name to its real Symbol.
+    """
+    text = _normalise_text(text)
+    if not text:
+        raise InputError("Enter an expression.")
+    if "=" in text:
+        raise InputError("Enter an expression only, without an = sign.")
+    if not _ALLOWED_CHARS.match(text):
+        bad = sorted(set(ch for ch in text if not _ALLOWED_CHARS.match(ch)))
+        raise InputError("Unexpected character: %s" % " ".join(bad))
+    prob = Problem(names[0])
+    try:
+        expr = _parse_side(text, prob, variables=set(names) | {"e"})
+    except InputError as err:
+        message = str(err)
+        if message.startswith("Unknown symbol"):
+            message = message.split(". ")[0] + (
+                ". Here you can use %s, numbers, pi, e and functions such as "
+                "sin, cos, exp, sqrt, u(...) and delta(...)." % ", ".join(names))
+        raise InputError(message)
+    symbols = {}
+    swaps = {}
+    for name in names:
+        symbols[name] = sp.Symbol(name, real=True)
+        swaps[sp.Symbol(name)] = symbols[name]
+    swaps[prob.x] = symbols[names[0]]
+    return expr.xreplace(swaps), symbols
