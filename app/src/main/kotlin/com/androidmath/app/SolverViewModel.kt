@@ -3,6 +3,7 @@ package com.androidmath.app
 import android.app.Application
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.text.TextRange
@@ -12,6 +13,10 @@ import androidx.lifecycle.viewModelScope
 import com.androidmath.core.History
 import com.androidmath.core.HistoryEntry
 import com.androidmath.core.Method
+import com.androidmath.core.PhysicsCatalog
+import com.androidmath.core.PhysicsInputs
+import com.androidmath.core.PhysicsPreset
+import com.androidmath.core.Scenario
 import com.androidmath.core.SolveResult
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -41,6 +46,7 @@ enum class Mode(val title: String) {
     Recurrence("Difference equations"),
     Dynamics("Stability and dynamics"),
     Vector("Vector calculus"),
+    Physics("Physics"),
 }
 
 /** The engine's name for a math-tool section, or null for the other sections. */
@@ -132,12 +138,103 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
 
     private var previewJob: Job? = null
 
+    /** The physics scenarios, loaded from the engine once it has started. */
+    var physicsCatalog by mutableStateOf<PhysicsCatalog?>(null)
+        private set
+    /** The scenario the physics form is showing. */
+    var physicsScenario by mutableStateOf<Scenario?>(null)
+        private set
+    /** Physics form: the text typed in each box, the unit chosen for it, and each effect's option. */
+    val physicsValues = mutableStateMapOf<String, String>()
+    val physicsUnits = mutableStateMapOf<String, String>()
+    val physicsEffects = mutableStateMapOf<String, String>()
+    var physicsQuestion by mutableStateOf("")
+        private set
+    /** A physics problem asked for before the catalog had loaded (a launch intent). */
+    private var pendingPhysics: Triple<String, Map<String, String>, Int>? = null
+
     init {
         history = historyStore.load()
         viewModelScope.launch {
             Engine.warmUp(getApplication())
             engineReady = true
+            physicsCatalog = Engine.physicsCatalog(getApplication())
+            pendingPhysics?.let { (key, fields, openTab) ->
+                pendingPhysics = null
+                restore(key, fields, openTab)
+            }
         }
+    }
+
+    /** Opens a physics scenario with its first preset filled in. */
+    fun openScenario(id: String) {
+        val scenario = physicsCatalog?.scenario(id) ?: return
+        open(Mode.Physics)
+        physicsScenario = scenario
+        resetPhysics(scenario)
+        scenario.presets.firstOrNull()?.let { applyPreset(it) }
+        screen = Screen.Input
+        refreshPreview()
+    }
+
+    private fun resetPhysics(scenario: Scenario) {
+        physicsValues.clear()
+        physicsUnits.clear()
+        physicsEffects.clear()
+        for (f in scenario.fields) {
+            physicsValues[f.id] = f.initialValue
+            physicsUnits[f.id] = f.initialUnit
+        }
+        physicsEffects.putAll(scenario.defaultEffects())
+        physicsQuestion = scenario.questions.firstOrNull()?.id ?: ""
+        inputError = null
+    }
+
+    /** Fills the form with a preset's realistic values, effects and question. */
+    fun applyPreset(preset: PhysicsPreset) {
+        val scenario = physicsScenario ?: return
+        resetPhysics(scenario)
+        for ((id, entry) in preset.values) {
+            physicsValues[id] = entry.getOrElse(0) { "" }
+            entry.getOrNull(1)?.let { physicsUnits[id] = it }
+        }
+        physicsEffects.putAll(preset.effects)
+        preset.question?.let { physicsQuestion = it }
+        refreshPreview()
+    }
+
+    fun setPhysicsValue(id: String, text: String) {
+        physicsValues[id] = text
+        inputError = null
+    }
+
+    fun setPhysicsUnit(id: String, unit: String) {
+        physicsUnits[id] = unit
+        inputError = null
+    }
+
+    /** Switches an optional effect; the governing equation shown at the top follows. */
+    fun setPhysicsEffect(id: String, option: String) {
+        physicsEffects[id] = option
+        refreshPreview()
+    }
+
+    fun choosePhysicsQuestion(id: String) {
+        physicsQuestion = id
+        inputError = null
+    }
+
+    /** What the physics form currently holds: the visible boxes, with "to find" ones left blank. */
+    fun physicsInputs(): PhysicsInputs {
+        val scenario = physicsScenario ?: return PhysicsInputs(emptyMap(), emptyMap(), "")
+        val effects = LinkedHashMap<String, String>(physicsEffects)
+        val finds = scenario.question(physicsQuestion)?.finds ?: emptyList()
+        val values = LinkedHashMap<String, Pair<String, String>>()
+        for (f in scenario.visibleFields(effects, physicsQuestion)) {
+            val text = if (f.id in finds) "" else (physicsValues[f.id] ?: "")
+            values[f.id] = text to (physicsUnits[f.id] ?: f.initialUnit)
+        }
+        return PhysicsInputs(values, effects, physicsQuestion)
     }
 
     val selectedMethod: Method?
@@ -231,6 +328,7 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
 
     private val previewKind: String
         get() = when {
+            mode == Mode.Physics -> "physics:" + (physicsScenario?.id ?: "")
             mode.toolName() != null -> mode.toolName() + ":" + toolOp
             mode == Mode.Systems -> "system"
             mode == Mode.Fourier -> "fourier"
@@ -292,11 +390,14 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
         inputError = null
         previewJob?.cancel()
         val text = when {
+            // A physics scenario previews its governing equation for the chosen effects.
+            mode == Mode.Physics -> physicsInputs().encode()
             mode == Mode.Systems -> equation.text + ";" + equation2.text + ";" + equation3.text
             twoFields -> equation.text + ";" + equation2.text
             else -> equation.text
         }
-        val blank = equation.text.isBlank() && equation2.text.isBlank() && equation3.text.isBlank()
+        val blank = mode != Mode.Physics &&
+            equation.text.isBlank() && equation2.text.isBlank() && equation3.text.isBlank()
         previewJob = viewModelScope.launch {
             delay(250)
             val r = Engine.preview(getApplication(), if (blank) "" else text, previewKind)
@@ -355,6 +456,7 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
             Mode.Pde -> if (pdeKind == "laplace") "laplace_eq" else pdeKind
             Mode.LinearAlgebra, Mode.Calculus, Mode.Series, Mode.Complex,
             Mode.Special, Mode.FourierTransform, Mode.Recurrence, Mode.Dynamics, Mode.Vector -> mode.toolName() ?: "first"
+            Mode.Physics -> "physics"
         }
 
     /** Every input box of the current section, by the names [restore] understands. */
@@ -371,6 +473,11 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
                 fields["h"] = stepSize; fields["n"] = stepCount
             }
             Mode.Laplace -> {}
+            Mode.Physics -> {
+                // The scenario id stands in for the equation; the form travels as one JSON string.
+                fields["equation"] = physicsScenario?.id ?: ""
+                fields["inputs"] = physicsInputs().encode()
+            }
             Mode.LinearAlgebra, Mode.Calculus, Mode.Series, Mode.Complex,
             Mode.Special, Mode.FourierTransform, Mode.Recurrence, Mode.Dynamics, Mode.Vector -> {
                 fields["op"] = toolOp
@@ -411,6 +518,10 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
 
     /** A one-line plain-text description of the current problem for the history list. */
     private fun historyLabel(): String = when (mode) {
+        Mode.Physics -> {
+            val scenario = physicsScenario
+            if (scenario == null) "" else scenario.title + " \u2013 " + physicsInputs().label(scenario)
+        }
         Mode.Systems -> "x' = ${equation.text},  y' = ${equation2.text}" +
             (if (equation3.text.isNotBlank()) ",  z' = ${equation3.text}" else "") +
             (if (x0.isNotBlank()) ",  x(0) = $x0,  y(0) = $y0" else "")
@@ -470,6 +581,10 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
      * both come through here. [key] is a section key as in [modeKey].
      */
     fun restore(key: String, fields: Map<String, String>, openTab: Int = 0) {
+        if (key == "physics") {
+            restorePhysics(fields, openTab)
+            return
+        }
         open(
             when (key) {
                 "second" -> Mode.SecondOrder
@@ -528,9 +643,40 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
         solve(openTab)
     }
 
+    /**
+     * Reopens a physics scenario. Fields: "equation" is the scenario id, "inputs"
+     * the saved form (optional), "preset" a preset to start from instead, and
+     * "op" the question to ask.
+     */
+    private fun restorePhysics(fields: Map<String, String>, openTab: Int) {
+        val catalog = physicsCatalog
+        if (catalog == null) {
+            // The engine is still starting; finish this once the catalog is in.
+            pendingPhysics = Triple("physics", fields, openTab)
+            return
+        }
+        val scenario = catalog.scenario(fields["equation"] ?: "") ?: return
+        openScenario(scenario.id)
+        scenario.presets.firstOrNull { it.id == fields["preset"] }?.let { applyPreset(it) }
+        val saved = fields["inputs"]?.let { PhysicsInputs.decode(it) }
+        if (saved != null) {
+            resetPhysics(scenario)
+            for ((id, entry) in saved.values) {
+                physicsValues[id] = entry.first
+                if (entry.second.isNotEmpty()) physicsUnits[id] = entry.second
+            }
+            physicsEffects.putAll(saved.effects)
+            if (scenario.question(saved.question) != null) physicsQuestion = saved.question
+        }
+        fields["op"]?.let { if (scenario.question(it) != null) physicsQuestion = it }
+        refreshPreview()
+        solve(openTab)
+    }
+
     /** True when enough has been typed to press Solve. */
     val canSolve: Boolean
         get() = when {
+            mode == Mode.Physics -> physicsScenario != null
             mode == Mode.Boundary && eigenMode -> x0.isNotBlank()
             mode == Mode.Systems -> equation.text.isNotBlank() && equation2.text.isNotBlank()
             mode == Mode.Pde && pdeKind == "wave" -> equation.text.isNotBlank() || equation2.text.isNotBlank()
@@ -547,7 +693,9 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
         inputError = null
         viewModelScope.launch {
             val mathTool = mode.toolName()
-            val (json, parsed) = if (mathTool != null) {
+            val (json, parsed) = if (mode == Mode.Physics) {
+                Engine.physics(getApplication(), physicsScenario?.id ?: "", physicsInputs().encode())
+            } else if (mathTool != null) {
                 Engine.tool(getApplication(), mathTool, toolOp, equation.text, x0, y0)
             } else if (mode == Mode.Numerical) {
                 Engine.numeric(getApplication(), equation.text, x0, y0, stepSize, stepCount)

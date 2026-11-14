@@ -68,11 +68,17 @@ What it covers so far:
   to third order, by the characteristic equation and undetermined
   coefficients, with starting values.
 
+- **Physics**: real situations set up from the physical law and solved as
+  differential equations, with optional effects you switch on (air
+  resistance, buoyancy, damping, a driving force, leakage, ...), values with
+  units, and a choice of what to find. So far: a falling object, a mass on
+  a spring, and an RC circuit.
+
 ## Layout
 
 | Path | What it is |
 |---|---|
-| `app/src/main/python/deengine/` | The solver engine: Python + SymPy, run on-device through Chaquopy. Produces the steps as JSON. |
+| `app/src/main/python/deengine/` | The solver engine: Python + SymPy, run on-device through Chaquopy. Produces the steps as JSON. Physics scenarios are in `scenarios/`. |
 | `app/src/main/assets/math/` | The steps page (KaTeX) shown in a WebView. |
 | `app/src/main/kotlin/` | Jetpack Compose UI, the engine bridge and the graph. |
 | `core/` | Pure Kotlin: expression evaluator, RK4, slope-field and plotting maths, JSON models. |
@@ -94,6 +100,27 @@ Try the engine from a terminal:
 python tests/python/show.py "y' + 2y = x" 0 1
 python tests/python/show.py "y'' + 3y' + 2y = e^x" 0 1 0
 ```
+
+## Adding a physics scenario
+
+A scenario is one module in `app/src/main/python/deengine/scenarios/`. Most
+of it is a declaration; the app builds its form from that, so no app code
+changes are needed.
+
+1. Declare `SCENARIO` with the constructors in `scenarios/spec.py`:
+   `field(...)` for each quantity (its kind picks the unit choices from
+   `units.py`), `switch(...)` or `choice(...)` for each optional effect and
+   the fields it needs, `question(...)` for each thing that can be asked
+   (its extra parameters, the fields it finds, the base fields it hides), and
+   `preset(...)` for realistic starting values.
+2. Write `equation(effects)`, the LaTeX of the governing equation for the
+   chosen effects, and `solve(inputs)`, which reads SI values with
+   `inputs.need("m", "why")` (raising a message that names the missing
+   field) and returns `common.finish(...)` with the steps, the headline
+   answer, the curve, the ideal curve and the animation samples.
+3. Add the module to `SCENARIOS` in `scenarios/__init__.py`.
+4. Test it in `tests/python/test_engine.py` against an independent
+   integration of the same equation, as the existing scenarios are.
 
 ## Adding a solution method
 

@@ -163,6 +163,11 @@ private val NUMERICAL_EXAMPLES = listOf(
 
 @Composable
 fun InputScreen(model: SolverViewModel) {
+    if (model.mode == Mode.Physics) {
+        // Physics scenarios build their form from the engine's catalog (see PhysicsScreens.kt).
+        PhysicsInputScreen(model)
+        return
+    }
     if (model.mode == Mode.Pde) {
         // The PDE section has its own form (see PdeScreens.kt).
         PdeInputScreen(model)
@@ -505,6 +510,7 @@ fun InputScreen(model: SolverViewModel) {
                     // The math tools never reach this screen; they have their own form.
                     Mode.LinearAlgebra, Mode.Calculus, Mode.Series, Mode.Complex,
                     Mode.Special, Mode.FourierTransform, Mode.Recurrence, Mode.Dynamics, Mode.Vector -> emptyList()
+                    Mode.Physics -> emptyList()
                 }
                 if (boundary && !eigen) {
                     for (example in BOUNDARY_EXAMPLES) {

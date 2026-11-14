@@ -50,6 +50,8 @@ class MainActivity : ComponentActivity() {
      * Math tools (modes linalg, calculus, series, complex, special, ftransform,
      * recurrence): "op" is the
      * operation, equation the matrix or expression, x0 and y0 the small boxes.
+     * Physics (mode physics): equation is the scenario id (falling, spring, rc),
+     * "preset" a preset id, "op" the question id, "inputs" the whole form as JSON.
      */
     private fun openFromIntent(intent: Intent?) {
         val source = intent ?: return
@@ -65,6 +67,7 @@ class MainActivity : ComponentActivity() {
         val FIELD_NAMES = listOf(
             "equation", "equation2", "equation3", "x0", "y0", "yp0", "z0", "h", "n",
             "a", "va", "ka", "b", "vb", "kb", "bc", "t1", "t2", "steps", "op",
+            "inputs", "preset",
         )
     }
 }

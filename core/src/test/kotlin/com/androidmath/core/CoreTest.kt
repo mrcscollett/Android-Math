@@ -632,3 +632,91 @@ class PdeTest {
         assertTrue(cells.all { it in 0f..1f })
     }
 }
+
+class PhysicsTest {
+    private fun fixture(name: String) = javaClass.getResource("/$name")!!.readText()
+
+    @Test fun catalogDrivesTheForm() {
+        val catalog = EngineJson.catalog(fixture("physics_catalog.json"))
+        assertTrue(catalog.ok)
+        assertEquals(listOf("falling", "spring", "rc"), catalog.scenarios.map { it.id })
+        assertTrue(catalog.upcoming.isNotEmpty())
+        val falling = catalog.scenario("falling")!!
+        assertEquals(mapOf("drag" to "none", "buoyancy" to "off", "altitude" to "off"), falling.defaultEffects())
+
+        // Base fields only, then the fields of each effect as it is switched on.
+        assertEquals(listOf("m", "g", "v0", "h0"), falling.visibleFields(falling.defaultEffects(), "ground").map { it.id })
+        val quadratic = falling.defaultEffects() + ("drag" to "quadratic") + ("buoyancy" to "on")
+        assertEquals(
+            listOf("m", "g", "v0", "h0", "c", "rho", "cd", "area", "rho_f", "vol"),
+            falling.visibleFields(quadratic, "ground").map { it.id },
+        )
+        // A question adds its parameters and hides the base fields it does not use.
+        assertEquals(
+            listOf("m", "g", "b", "vt_meas"),
+            falling.visibleFields(falling.defaultEffects() + ("drag" to "linear"), "infer").map { it.id },
+        )
+        assertEquals(listOf("b", "c"), falling.question("infer")!!.finds)
+
+        val mass = falling.fields.first { it.id == "m" }
+        assertEquals("80", mass.initialValue)
+        assertEquals("kg", mass.initialUnit)
+        assertEquals("lb", mass.unitLabel("lb"))
+        assertEquals("", falling.fields.first { it.id == "b" }.initialValue)
+        assertEquals("quadratic", falling.presets.first { it.id == "skydiver" }.effects["drag"])
+        assertFalse(EngineJson.catalog("not json").ok)
+    }
+
+    @Test fun resultsCarryCurvesAndAnimation() {
+        for (name in listOf("physics_falling.json", "physics_spring.json", "physics_rc.json")) {
+            val r = EngineJson.solveResult(fixture(name))
+            assertTrue(name, r.ok)
+            assertEquals("physics", r.kind)
+            val p = r.physics!!
+            assertTrue(p.headline.text.isNotBlank())
+            assertTrue(p.curve.size > 100)
+            assertTrue(p.tMax > 0)
+            val (lo, hi) = p.valueRange()
+            assertTrue(hi > lo)
+            val anim = p.animation!!
+            assertTrue(anim.kind in setOf("fall", "spring", "capacitor"))
+            assertTrue(anim.fractionAt(p.tMax / 2) in 0.0..1.0)
+            assertEquals(anim.points.first()[1], anim.valueAt(-1.0), 0.0)
+            assertEquals(anim.points.last()[1], anim.valueAt(p.tMax * 2), 0.0)
+            assertTrue(r.applicableMethods.isNotEmpty())
+        }
+        val fall = EngineJson.solveResult(fixture("physics_falling.json")).physics!!
+        assertEquals("fall", fall.animation!!.kind)
+        assertEquals(4000.0, fall.animation!!.valueAt(0.0), 1e-9)      // starts at the jump height
+        assertEquals(0.0, fall.animation!!.valueAt(fall.tMax), 1e-6)   // and ends on the ground
+        assertEquals(fall.tMax, fall.marker!!.t, 1e-9)
+        assertTrue(fall.ideal.isNotEmpty())                             // drag is on, so the ideal curve is given
+    }
+
+    @Test fun interpolationAndFlattening() {
+        val pts = listOf(listOf(0.0, 1.0), listOf(2.0, 5.0), listOf(4.0, 5.0))
+        assertEquals(3.0, Samples.valueAt(pts, 1.0), 1e-12)
+        assertEquals(5.0, Samples.valueAt(pts, 3.0), 1e-12)
+        assertEquals(0.0, Samples.valueAt(emptyList(), 1.0), 0.0)
+        assertArrayEquals(doubleArrayOf(0.0, 1.0, 2.0, 5.0, 4.0, 5.0), Samples.flatten(pts), 0.0)
+        val anim = PhysicsAnimation("fall", pts, 1.0, 5.0)
+        assertEquals(0.5, anim.fractionAt(1.0), 1e-12)
+        assertEquals(0.0, PhysicsAnimation("fall", pts, 2.0, 2.0).fractionAt(1.0), 0.0)
+    }
+
+    @Test fun inputsRoundTripAndLabel() {
+        val inputs = PhysicsInputs(
+            linkedMapOf("m" to ("80" to "kg"), "g" to ("9.81" to "m/s2"), "b" to ("" to "kg/s"), "h0" to ("1.5" to "km")),
+            mapOf("drag" to "linear"), "ground",
+        )
+        val text = inputs.encode()
+        assertEquals(inputs, PhysicsInputs.decode(text))
+        assertTrue(text.contains("\"question\":\"ground\""))
+        assertNull(PhysicsInputs.decode("{broken"))
+        val falling = EngineJson.catalog(fixture("physics_catalog.json")).scenario("falling")!!
+        assertEquals(
+            "Time and speed at the ground: Mass 80 kg, Gravity at the surface 9.81 m/s\u00b2, Starting height 1.5 km",
+            inputs.label(falling),
+        )
+    }
+}

@@ -123,17 +123,40 @@ def complex_number(operation, text, n_text=""):
     return tool("complex", operation, text, n_text)
 
 
+def physics(scenario_id, inputs_json=""):
+    """Solve a physics scenario.
+
+    inputs_json is {"values": {field: {"value": text, "unit": id}}, "effects":
+    {effect: option}, "question": id}; a blank value means unknown. With no
+    "values" the scenario's first preset (or the one named by "preset") is used.
+    """
+    from . import scenarios as physics_scenarios
+    return _guard(lambda: physics_scenarios.solve(scenario_id, inputs_json or ""))
+
+
+def physics_catalog():
+    """The scenarios with their fields, effects, questions and presets, for building the form."""
+    from . import scenarios as physics_scenarios
+    return json.dumps(physics_scenarios.catalog())
+
+
 def preview(text, kind="ode"):
     """Render what the user has typed so far.
 
     kind is "ode" for an equation, "forward" for f(t), "inverse" for F(s),
     "system" for a pair of right-hand sides written as "f;g",
     "fourier" for f(x) and an optional left-half formula written as "f;left",
-    and "tool:operation" for the math tools (e.g. "linalg:det", "series:taylor").
+    "tool:operation" for the math tools (e.g. "linalg:det", "series:taylor"),
+    and "physics:scenario" for a physics scenario (the text is its inputs JSON).
     """
     try:
         if not text.strip():
             return json.dumps({"ok": True, "latex": "", "order": 1})
+        if kind.startswith("physics:"):
+            # A physics scenario: the text is its inputs JSON, the answer its governing equation.
+            from . import scenarios as physics_scenarios
+            return json.dumps({"ok": True, "order": 0,
+                               "latex": physics_scenarios.equation(kind.split(":", 1)[1], text)})
         if ":" in kind:
             # A math tool, written "tool:operation" (for example "linalg:det").
             name, operation = kind.split(":", 1)

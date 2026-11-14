@@ -133,15 +133,9 @@ private val TOOL_SECTIONS = listOf(
     ),
 )
 
-private val UPCOMING_SECTIONS = listOf(
-    Section("Physics 1", "Motion, drag, springs, pendulums, cooling", null),
-    Section("Physics 2", "RC, RL and RLC circuits, charged particles, decay", null),
-)
-
 private val GROUPS = listOf(
     "Differential equations" to EQUATION_SECTIONS,
     "Math tools" to TOOL_SECTIONS,
-    "Coming soon" to UPCOMING_SECTIONS,
 )
 
 @Composable
@@ -184,6 +178,28 @@ fun HomeScreen(model: SolverViewModel) {
                 }
                 items(sections, key = { "section-" + it.title }) { section ->
                     SectionCard(section, model)
+                }
+            }
+            // Physics scenarios come from the engine's catalog, so new ones appear by themselves.
+            item(key = "group-physics") {
+                Text(
+                    "Physics",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.widthIn(max = 640.dp).fillMaxWidth().padding(top = 12.dp, bottom = 2.dp),
+                )
+            }
+            val catalog = model.physicsCatalog
+            if (catalog == null) {
+                item(key = "physics-loading") {
+                    PhysicsCard("Physics scenarios", "Starting the solver\u2026", false) {}
+                }
+            } else {
+                items(catalog.scenarios, key = { "scenario-" + it.id }) { scenario ->
+                    PhysicsCard(scenario.title, scenario.description, true) { model.openScenario(scenario.id) }
+                }
+                items(catalog.upcoming, key = { "upcoming-$it" }) { name ->
+                    PhysicsCard(name, "Coming soon", false) {}
                 }
             }
             if (favorites.isNotEmpty()) {
@@ -234,6 +250,29 @@ private fun SectionCard(section: Section, model: SolverViewModel) {
                     modifier = Modifier.padding(top = 4.dp),
                 )
             }
+        }
+    }
+}
+
+/** A physics scenario on the home screen; [ready] ones open their form. */
+@Composable
+private fun PhysicsCard(title: String, detail: String, ready: Boolean, onOpen: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .widthIn(max = 640.dp)
+            .fillMaxWidth()
+            .padding(vertical = 6.dp)
+            .alpha(if (ready) 1f else 0.55f)
+            .then(if (ready) Modifier.clickable(onClick = onOpen) else Modifier),
+        colors = if (ready) {
+            CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+        } else {
+            CardDefaults.cardColors()
+        },
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Text(detail, style = MaterialTheme.typography.bodyMedium)
         }
     }
 }

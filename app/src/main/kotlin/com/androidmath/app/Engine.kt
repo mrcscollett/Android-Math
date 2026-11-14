@@ -2,6 +2,7 @@ package com.androidmath.app
 
 import android.content.Context
 import com.androidmath.core.EngineJson
+import com.androidmath.core.PhysicsCatalog
 import com.androidmath.core.PreviewResult
 import com.androidmath.core.SolveResult
 import com.chaquo.python.PyObject
@@ -98,6 +99,23 @@ object Engine {
     suspend fun tool(
         context: Context, name: String, operation: String, text: String, extra1: String, extra2: String,
     ): Pair<String, SolveResult> = call(context, "tool", name, operation, text, extra1, extra2)
+
+    /**
+     * A physics scenario. [inputs] is the form as JSON: the values with their
+     * units, the option chosen for each effect, and the question.
+     */
+    suspend fun physics(context: Context, scenario: String, inputs: String): Pair<String, SolveResult> =
+        call(context, "physics", scenario, inputs)
+
+    /** The scenarios with their fields, effects, questions and presets. */
+    suspend fun physicsCatalog(context: Context): PhysicsCatalog = withContext(dispatcher) {
+        try {
+            EngineJson.catalog(module(context).callAttr("physics_catalog").toString())
+        } catch (e: Throwable) {
+            android.util.Log.e("Engine", "physics_catalog failed", e)
+            PhysicsCatalog(ok = false)
+        }
+    }
 
     private suspend fun call(
         context: Context, function: String, vararg args: String,

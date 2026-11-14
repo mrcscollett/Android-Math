@@ -79,6 +79,8 @@ fun ResultScreen(model: SolverViewModel) {
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Column(Modifier.widthIn(max = CONTENT_WIDTH).fillMaxWidth()) {
+                // A physics scenario leads with its answer in words and units.
+                result.physics?.let { PhysicsHeadline(it) }
                 if (methods.size > 1) {
                     Text(
                         when (result.kind) {
@@ -120,6 +122,8 @@ fun ResultScreen(model: SolverViewModel) {
                     script = "showSolution(${jsString(model.resultJson)}, ${jsString(method?.id ?: "")});",
                     modifier = Modifier.fillMaxSize(),
                 )
+            } else if (result.kind == "physics") {
+                PhysicsTab(model)
             } else if (result.kind == "system" || result.graph == "phase") {
                 PhaseTab(model)
             } else if (result.kind == "pde" || result.graph == "surface") {

@@ -48,6 +48,8 @@ data class SolveResult(
     @SerialName("initial_expr") val initialExpr: String? = null,
     /** True when the solution is a function of two space variables, drawn as a heat map. */
     val surface: Boolean = false,
+    /** For kind "physics": the headline answer, the curves and the animation. */
+    val physics: PhysicsData? = null,
 ) {
     val applicableMethods: List<Method> get() = methods.filter { it.applicable }
 }
@@ -164,6 +166,12 @@ object EngineJson {
         json.decodeFromString(SolveResult.serializer(), text)
     } catch (e: Exception) {
         SolveResult(ok = false, error = "The solver returned something unexpected.")
+    }
+
+    fun catalog(text: String): PhysicsCatalog = try {
+        json.decodeFromString(PhysicsCatalog.serializer(), text)
+    } catch (e: Exception) {
+        PhysicsCatalog(ok = false)
     }
 
     fun preview(text: String): PreviewResult = try {
