@@ -9,10 +9,21 @@ _U = {
                ("km", "km", "km", 1e3, 0), ("ft", "ft", "ft", 0.3048, 0), ("in", "in", "in", 0.0254, 0),
                ("mi", "mi", "mi", 1609.344, 0)],
     "time": [("s", "s", "s", 1, 0), ("ms", "ms", "ms", 1e-3, 0), ("us", "\u00b5s", "\\mu s", 1e-6, 0),
-             ("min", "min", "min", 60, 0), ("h", "h", "h", 3600, 0)],
+             ("min", "min", "min", 60, 0), ("h", "h", "h", 3600, 0),
+             ("d", "days", "d", 86400, 0), ("y", "years", "yr", 31557600, 0)],
+    "rate": [("1/s", "1/s", "s^{-1}", 1, 0), ("1/min", "1/min", "min^{-1}", 1 / 60, 0),
+             ("1/h", "1/h", "h^{-1}", 1 / 3600, 0), ("1/d", "1/day", "d^{-1}", 1 / 86400, 0),
+             ("1/y", "1/year", "yr^{-1}", 1 / 31557600, 0)],
+    "temperature_rate": [("K/s", "K/s", "K/s", 1, 0), ("K/min", "\u00b0C/min", "K/min", 1 / 60, 0),
+                         ("K/h", "\u00b0C/h", "K/h", 1 / 3600, 0)],
+    "amount": [("", "units", "", 1, 0), ("g", "g", "g", 1, 0), ("mg", "mg", "mg", 1e-3, 0),
+               ("kg", "kg", "kg", 1e3, 0), ("Bq", "Bq", "Bq", 1, 0), ("MBq", "MBq", "MBq", 1e6, 0),
+               ("mol", "mol", "mol", 1, 0)],
+    "amount_rate": [("/s", "per s", "s^{-1}", 1, 0), ("/min", "per min", "min^{-1}", 1 / 60, 0),
+                    ("/h", "per h", "h^{-1}", 1 / 3600, 0), ("/d", "per day", "d^{-1}", 1 / 86400, 0)],
     "mass": [("kg", "kg", "kg", 1, 0), ("g", "g", "g", 1e-3, 0), ("mg", "mg", "mg", 1e-6, 0),
              ("lb", "lb", "lb", 0.45359237, 0)],
-    "speed": [("m/s", "m/s", "m/s", 1, 0), ("km/h", "km/h", "km/h", 1 / 3.6, 0),
+    "speed": [("m/s", "m/s", "m/s", 1, 0), ("mm/s", "mm/s", "mm/s", 1e-3, 0), ("cm/s", "cm/s", "cm/s", 0.01, 0), ("km/h", "km/h", "km/h", 1 / 3.6, 0),
               ("mph", "mph", "mph", 0.44704, 0), ("ft/s", "ft/s", "ft/s", 0.3048, 0)],
     "acceleration": [("m/s2", "m/s\u00b2", "m/s^2", 1, 0), ("ft/s2", "ft/s\u00b2", "ft/s^2", 0.3048, 0),
                      ("g0", "g", "g_0", 9.80665, 0)],
@@ -143,5 +154,7 @@ def tex(value, quantity, prefer=None, digits=4):
 def both(value, quantity, prefer=None):
     """Text in the preferred unit, with the SI value added when that differs."""
     main = text(value, quantity, prefer)
+    if quantity in ("amount", "amount_rate"):
+        return main            # these have no single SI unit to echo
     si = text(value, quantity, _U[quantity][0][0])
     return main if main == si else "%s (%s)" % (main, si)

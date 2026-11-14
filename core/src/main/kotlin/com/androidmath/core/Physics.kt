@@ -11,7 +11,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
 
-/** The physics scenarios the engine offers; the app builds its forms from this. */
+/** The physics models the engine offers; the app builds its forms from this. */
 @Serializable
 data class PhysicsCatalog(
     val ok: Boolean = true,
@@ -30,34 +30,56 @@ data class Scenario(
     val law: String = "",
     val fields: List<PhysicsField> = emptyList(),
     val effects: List<PhysicsEffect> = emptyList(),
-    val questions: List<PhysicsQuestion> = emptyList(),
     val presets: List<PhysicsPreset> = emptyList(),
 ) {
-    fun question(id: String): PhysicsQuestion? = questions.firstOrNull { it.id == id }
+    fun field(id: String): PhysicsField? = fields.firstOrNull { it.id == id }
 
     /** The option each effect starts on. */
     fun defaultEffects(): Map<String, String> = effects.associate { it.id to it.default }
 
     /**
-     * The boxes to show for the chosen effects and question, in the scenario's
-     * order: the base fields the question uses, the fields of every active
-     * effect option, and the question's own parameters.
+     * The variables that exist for the chosen effects, in the model's order:
+     * every variable that does not belong to an effect, plus the variables of
+     * each effect option that is switched on.
      */
-    fun visibleFields(chosen: Map<String, String>, questionId: String): List<PhysicsField> {
-        val q = question(questionId)
+    fun visibleFields(chosen: Map<String, String>): List<PhysicsField> {
         val wanted = HashSet<String>()
-        for (f in fields) if (f.group == "base") wanted.add(f.id)
         for (e in effects) {
             val option = e.options.firstOrNull { it.id == (chosen[e.id] ?: e.default) }
             if (option != null) wanted.addAll(option.fields)
         }
-        if (q != null) {
-            wanted.removeAll(q.hides.toSet())
-            wanted.addAll(q.params)
+        return fields.filter { it.group != "effect" || it.id in wanted }
+    }
+
+    /** [visibleFields] split into titled sections, in the order the form shows them. */
+    fun sections(chosen: Map<String, String>): List<FieldSection> {
+        val visible = visibleFields(chosen)
+        val out = ArrayList<FieldSection>()
+        for ((group, title) in GROUPS) {
+            val rows = visible.filter { it.group == group }
+            if (rows.isNotEmpty()) out.add(FieldSection(group, title, rows))
         }
-        return fields.filter { it.id in wanted }
+        val known = GROUPS.map { it.first }.toSet()
+        val rest = visible.filter { it.group !in known }
+        if (rest.isNotEmpty()) out.add(FieldSection("other", "Other", rest))
+        return out
+    }
+
+    companion object {
+        /** Group id to section title, in display order. */
+        val GROUPS: List<Pair<String, String>> = listOf(
+            "setup" to "The setup",
+            "initial" to "At the start",
+            "effect" to "Added effects",
+            "moment" to "At a moment",
+            "moment2" to "At a second moment",
+            "derived" to "Other quantities",
+        )
     }
 }
+
+/** One titled block of variable rows in the form. */
+data class FieldSection(val group: String, val title: String, val fields: List<PhysicsField>)
 
 @Serializable
 data class PhysicsField(
@@ -66,10 +88,10 @@ data class PhysicsField(
     val symbol: String = "",
     val quantity: String = "",
     val units: List<UnitChoice> = emptyList(),
-    /** Value text and unit id shown when the form opens, or null for an empty box. */
-    @SerialName("default") val initial: List<String>? = null,
-    /** "base" (always shown), "effect" (shown with its effect) or "param" (shown with its question). */
-    val group: String = "base",
+    /** Value text (null for an empty box) and unit id shown when the form opens. */
+    @SerialName("default") val initial: List<String?>? = null,
+    /** "setup", "initial", "effect" (exists only with its effect), "moment", "moment2" or "derived". */
+    val group: String = "setup",
     val hint: String = "",
 ) {
     val initialValue: String get() = initial?.getOrNull(0) ?: ""
@@ -96,24 +118,13 @@ data class PhysicsEffect(
 data class EffectOption(val id: String, val label: String = "", val fields: List<String> = emptyList())
 
 @Serializable
-data class PhysicsQuestion(
-    val id: String,
-    val label: String,
-    val params: List<String> = emptyList(),
-    /** Fields this question works out, shown as "to find" instead of as inputs. */
-    val finds: List<String> = emptyList(),
-    val hides: List<String> = emptyList(),
-)
-
-@Serializable
 data class PhysicsPreset(
     val id: String,
     val label: String,
     val description: String = "",
-    /** Field id to [value text, unit id]. */
+    /** Field id to [value text, unit id]; an empty value leaves the box blank but sets its unit. */
     val values: Map<String, List<String>> = emptyMap(),
     val effects: Map<String, String> = emptyMap(),
-    val question: String? = null,
 )
 
 /** What a solved scenario gives the result screen besides its steps. */
@@ -121,6 +132,10 @@ data class PhysicsPreset(
 data class PhysicsData(
     val scenario: String = "",
     val headline: Headline = Headline(),
+    /** The unknowns that were worked out, in the order they were solved. */
+    val found: List<FoundValue> = emptyList(),
+    /** The unknowns the entered values do not determine, each with what else is needed. */
+    val missing: List<MissingValue> = emptyList(),
     @SerialName("x_label") val xLabel: String = "",
     @SerialName("y_label") val yLabel: String = "",
     /** The solution as [t, value] samples. */
@@ -152,6 +167,21 @@ data class PhysicsData(
 
 @Serializable
 data class Headline(val label: String = "", val text: String = "")
+
+@Serializable
+data class FoundValue(
+    val id: String = "",
+    val label: String = "",
+    /** LaTeX symbol. */
+    val symbol: String = "",
+    /** The value with its unit, ready to show. */
+    val text: String = "",
+    /** The value in SI units. */
+    val value: Double = 0.0,
+)
+
+@Serializable
+data class MissingValue(val id: String = "", val label: String = "", val reason: String = "")
 
 @Serializable
 data class PhysicsMarker(val t: Double = 0.0, val y: Double = 0.0, val label: String = "")
@@ -206,12 +236,11 @@ object Samples {
     }
 }
 
-/** What the user entered for a scenario, as sent to the engine and kept in the history. */
+/** What the user entered for a model, as sent to the engine and kept in the history. */
 data class PhysicsInputs(
     /** Field id to (value text, unit id); a blank value means unknown. */
     val values: Map<String, Pair<String, String>>,
     val effects: Map<String, String>,
-    val question: String,
 ) {
     fun encode(): String = buildJsonObject {
         putJsonObject("values") {
@@ -223,20 +252,21 @@ data class PhysicsInputs(
             }
         }
         putJsonObject("effects") { for ((id, option) in effects) put(id, option) }
-        put("question", question)
     }.toString()
+
+    /** The variables with a value typed in, among those that exist for the chosen effects. */
+    fun knowns(scenario: Scenario): List<PhysicsField> =
+        scenario.visibleFields(effects).filter { !values[it.id]?.first.isNullOrBlank() }
 
     /** A one-line description for the history list: the entered values, in field order. */
     fun label(scenario: Scenario): String {
-        val q = scenario.question(question)?.label ?: question
         val parts = ArrayList<String>()
-        for (f in scenario.visibleFields(effects, question)) {
+        for (f in knowns(scenario)) {
             val entry = values[f.id] ?: continue
-            if (entry.first.isBlank()) continue
             val unit = f.unitLabel(entry.second)
-            parts.add(f.label + " " + entry.first + (if (unit.isEmpty()) "" else " $unit"))
+            parts.add(f.label + " " + entry.first.trim() + (if (unit.isEmpty()) "" else " $unit"))
         }
-        return q + ": " + parts.joinToString(", ")
+        return if (parts.isEmpty()) "No values entered" else "Known: " + parts.joinToString(", ")
     }
 
     companion object {
@@ -251,7 +281,7 @@ data class PhysicsInputs(
             }
             val effects = LinkedHashMap<String, String>()
             (root["effects"] as? JsonObject)?.forEach { (id, option) -> effects[id] = option.jsonPrimitive.content }
-            PhysicsInputs(values, effects, (root["question"] as? JsonPrimitive)?.content.orEmpty())
+            PhysicsInputs(values, effects)
         } catch (e: Exception) {
             null
         }

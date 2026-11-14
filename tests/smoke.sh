@@ -239,20 +239,27 @@ open gradient "x^2-y^2" "" "" 0 'text="Steps"' "--es mode vector --es op gradien
 expect gradient 'text="Gradient"'
 expect gradient 'Form the gradient'
 
-# Physics scenarios: the scenario id travels as "equation", the question as "op".
-open physics_fall "falling" "" "" 0 'text="Steps"' "--es mode physics --es preset skydiver --es op ground"
+# Physics models: the model id travels as "equation"; a preset fills in the known values
+# and the blank boxes are found. "inputs" carries a whole form typed by hand.
+open physics_fall "falling" "" "" 0 'text="Steps"' "--es mode physics --es preset skydiver"
 expect physics_fall 'text="Falling object"'
-expect physics_fall 'Reaches the ground after'
-expect physics_fall 'Set up the equation from Newton'
+expect physics_fall 'text="Found"'
+expect physics_fall 'text="Time to reach the ground"'
+expect physics_fall 'text="82.59 s"'
+expect physics_fall 'Set up the equation of motion'
 
-open physics_spring "spring" "" "" 1 'text="Graph"' "--es mode physics --es preset car --es op motion"
+open physics_spring "spring" "" "" 1 'text="Graph"' "--es mode physics --es preset car"
 expect physics_spring 'text="Mass on a spring"'
 expect physics_spring 'text="Play"'
-expect physics_spring 'Underdamped'
+expect physics_spring 'text="Natural period"'
 
-open physics_rc "rc" "" "" 0 'text="Steps"' "--es mode physics --es preset timer --es op target"
+open physics_rc "rc" "" "" 0 'text="Steps"' "--es mode physics --es preset timer"
 expect physics_rc 'text="RC circuit"'
-expect physics_rc 'The capacitor reaches'
-expect physics_rc 'Kirchhoff'
+expect physics_rc 'text="Time constant"'
+expect physics_rc 'Set up the circuit equation'
+
+open physics_cooling "cooling" "" "" 0 'text="Steps"' "--es mode physics --es preset coffee"
+expect physics_cooling 'text="Found"'
+expect physics_cooling 'text="Cooling constant"'
 
 exit $fail

@@ -2,12 +2,20 @@
 from . import units
 
 
-def field(fid, label, symbol, quantity, default=None, group="base", positive=False,
-          nonnegative=False, hint=""):
-    """An input box. `default` is (value text, unit id); group is base, effect or param."""
+def field(fid, label, symbol, quantity, default=None, group="setup", positive=False,
+          nonnegative=False, hint="", bounds=None, typical=1.0, optional=False):
+    """A variable row. `default` is (value text, unit id) or (None, unit id) for a blank box.
+
+    group: "setup" (parameters), "initial" (initial conditions), "moment" (the
+    state at one time), "moment2" (a second reading), "derived", or "effect"
+    (shown only with its effect). `bounds` (SI) and `typical` (an SI magnitude)
+    guide the numerical search when this variable is the unknown. An `optional`
+    variable is left out of the "could not be found" list.
+    """
     return {"id": fid, "label": label, "symbol": symbol, "quantity": quantity,
             "units": units.choices(quantity), "default": list(default) if default else None,
-            "group": group, "positive": positive, "nonnegative": nonnegative, "hint": hint}
+            "group": group, "positive": positive, "nonnegative": nonnegative, "hint": hint,
+            "bounds": list(bounds) if bounds else None, "typical": typical, "optional": optional}
 
 
 def switch(eid, label, description, fields):
@@ -25,15 +33,11 @@ def choice(eid, label, description, options, default):
             "options": [{"id": o[0], "label": o[1], "fields": list(o[2])} for o in options]}
 
 
-def question(qid, label, params=(), finds=(), hides=()):
-    """Something the scenario can answer. `params` are extra boxes it needs, `finds`
-    the fields it computes (shown as 'to find'), `hides` base fields it does not use."""
-    return {"id": qid, "label": label, "params": list(params), "finds": list(finds),
-            "hides": list(hides)}
+def preset(pid, label, description, values, effects=None):
+    """A real situation: the values known in it, {field: (value text, unit id)}.
 
-
-def preset(pid, label, description, values, effects=None, question=None):
-    """A realistic starting point: values are {field: (value text, unit id)}."""
+    Fields it does not mention are left blank, i.e. they are what gets found.
+    """
     return {"id": pid, "label": label, "description": description,
             "values": {k: list(v) for k, v in values.items()},
-            "effects": dict(effects or {}), "question": question}
+            "effects": dict(effects or {}), "question": None}

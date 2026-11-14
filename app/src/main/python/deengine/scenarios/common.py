@@ -7,7 +7,7 @@ from . import units
 
 
 class Inputs:
-    """The user's choices for one scenario: SI values, effects and the question."""
+    """The user's entries for one model: SI values (None when blank), units and effects."""
 
     def __init__(self, scenario, raw):
         self.scenario = scenario
@@ -19,47 +19,40 @@ class Inputs:
                 preset = p
         if preset is None and "values" not in raw:
             preset = scenario["presets"][0]
-        base_values = dict(preset["values"]) if preset else {}
-        base_effects = dict(preset.get("effects", {})) if preset else {}
         given = raw.get("values")
-        self.units = {}
-        self.values = {}
         if given is not None:
             source = given          # the form was filled in: a blank box means unknown
         else:
-            # No form (a preset, a test or a launch intent): field defaults, then the preset.
-            source = {f["id"]: {"value": f["default"][0], "unit": f["default"][1]}
-                      for f in scenario["fields"] if f.get("default")}
-            source.update({k: {"value": v[0], "unit": v[1]} for k, v in base_values.items()})
-        for fid, f in self.fields.items():
-            entry = source.get(fid) or {}
-            unit = entry.get("unit") or (f["default"][1] if f.get("default") else units.choices(f["quantity"])[0]["id"])
-            self.units[fid] = unit
-            self.values[fid] = units.parse(entry.get("value"), f["quantity"], unit, f["label"])
+            # A preset: its values only. Everything else is blank, i.e. to be found.
+            source = {k: {"value": v[0], "unit": v[1]} for k, v in preset["values"].items()}
+        base_effects = dict(preset.get("effects", {})) if preset else {}
         self.effects = {}
         chosen = raw.get("effects") if raw.get("effects") is not None else base_effects
         for e in scenario["effects"]:
             value = chosen.get(e["id"], e["default"])
             valid = [o["id"] for o in e["options"]]
             self.effects[e["id"]] = value if value in valid else e["default"]
-        questions = [q["id"] for q in scenario["questions"]]
-        self.question = raw.get("question") if raw.get("question") in questions else (
-            preset.get("question") if preset and preset.get("question") in questions else questions[0])
-
-    def get(self, fid):
-        return self.values.get(fid)
-
-    def need(self, fid, why=None):
-        """A value that must be known; raises a message naming the field otherwise."""
-        value = self.values.get(fid)
-        f = self.fields[fid]
-        if value is None:
-            raise InputError("To %s, fill in %s." % (why or "answer this", f["label"].lower()))
-        if f.get("positive") and value <= 0:
-            raise InputError("%s must be greater than zero." % f["label"])
-        if f.get("nonnegative") and value < 0:
-            raise InputError("%s cannot be negative." % f["label"])
-        return value
+        self.active = active_ids(scenario, self.effects)
+        self.units = {}
+        self.values = {}
+        for fid, f in self.fields.items():
+            entry = source.get(fid) or {}
+            default_unit = f["default"][1] if f.get("default") else units.choices(f["quantity"])[0]["id"]
+            # "" is a real unit id (a plain number), so only a missing unit falls back.
+            unit = entry.get("unit") if entry.get("unit") is not None else default_unit
+            self.units[fid] = unit
+            value = units.parse(entry.get("value"), f["quantity"], unit, f["label"]) \
+                if fid in self.active else None
+            if value is not None:
+                if f.get("positive") and value <= 0:
+                    raise InputError("%s must be greater than zero." % f["label"])
+                if f.get("nonnegative") and value < 0:
+                    raise InputError("%s cannot be negative." % f["label"])
+                if f.get("bounds") and not (f["bounds"][0] <= value <= f["bounds"][1]):
+                    raise InputError("%s is outside the range this model allows (%s to %s)." % (
+                        f["label"], units.text(f["bounds"][0], f["quantity"], unit),
+                        units.text(f["bounds"][1], f["quantity"], unit)))
+            self.values[fid] = value
 
     def on(self, eid, option="on"):
         return self.effects.get(eid) == option
@@ -83,6 +76,16 @@ class Inputs:
                          units.tex(value, f["quantity"], self.units.get(fid)),
                          units.tex(value, f["quantity"], units.choices(f["quantity"])[0]["id"])])
         return rows
+
+
+def active_ids(scenario, effects):
+    """Ids of the variables that exist for the chosen effects, in the model's order."""
+    wanted = set(f["id"] for f in scenario["fields"] if f["group"] != "effect")
+    for e in scenario["effects"]:
+        for o in e["options"]:
+            if o["id"] == effects.get(e["id"], e["default"]):
+                wanted.update(o["fields"])
+    return [f["id"] for f in scenario["fields"] if f["id"] in wanted]
 
 
 def knowns_step(inp, ids):
@@ -205,29 +208,97 @@ def linear_working(symbol, rate_tex, source_tex, final_tex, start_tex):
     ]
 
 
-def method(method_id, name, reason, steps, answer_tex, verified, note):
-    return {"id": method_id, "name": name, "applicable": True, "reason": reason, "steps": steps,
-            "general_latex": None, "particular_latex": answer_tex,
-            "plot": {"general_expr": None, "particular_expr": None, "points": []},
-            "verified": verified, "verify_note": note}
+# --------------------------------------------------------------------------
+# Building blocks for the models
+# --------------------------------------------------------------------------
+
+_NUMERIC_CACHE = {}
 
 
-def finish(scenario, inp, equation_tex, headline, methods, graph):
-    """Assemble the result JSON. `graph` holds the curve, ideal curve, marker and animation."""
-    for m in methods:
-        if not m["applicable"]:
-            continue
-        m["steps"].append({"title": "Answer", "text": headline["text"],
-                           "latex": [m["particular_latex"]] if m["particular_latex"] else [],
-                           "substeps": [], "kind": "answer"})
-        if m["verify_note"]:
-            kind = {True: "check-ok", False: "check-bad", None: "check-unknown"}[m["verified"]]
-            m["steps"].append({"title": "Check", "text": m["verify_note"], "latex": [],
-                               "substeps": [], "kind": kind})
-    physics = {"scenario": scenario["id"], "headline": headline}
-    physics.update(graph)
-    return {"schema": 1, "ok": True, "kind": "physics", "tool": "", "title": scenario["title"],
-            "order": 0, "indep": "t", "dep": "", "input_latex": equation_tex,
-            "normal_latex": equation_tex, "rhs_expr": None, "ic": None,
-            "summary": headline["text"], "other_types": [], "methods": methods,
-            "physics": physics}
+class Numeric:
+    """A numerically integrated solution of state' = deriv(t, state), cached and interpolated."""
+
+    def __init__(self, deriv, state0, scale):
+        self.deriv, self.state0 = deriv, list(state0)
+        self.scale = max(scale, 1e-12)
+        self.runs = {}
+
+    def state(self, t):
+        end = self.scale
+        while end < t:
+            end *= 4
+            if end > self.scale * 4 ** 12:
+                raise ValueError("time out of range")
+        if end not in self.runs:
+            self.runs[end] = rk4(self.deriv, self.state0, end, 2400)
+        samples = self.runs[end]
+        return [interpolate(samples, t, i) for i in range(len(self.state0))]
+
+
+def numeric(key, deriv, state0, scale):
+    """A Numeric for these parameters, reused while the solver searches."""
+    if key not in _NUMERIC_CACHE:
+        if len(_NUMERIC_CACHE) > 200:
+            _NUMERIC_CACHE.clear()
+        _NUMERIC_CACHE[key] = Numeric(deriv, state0, scale)
+    return _NUMERIC_CACHE[key]
+
+
+def oscillator(m, c, k, x0, v0, f_const=0.0, f0=0.0, w=0.0):
+    """Exact solution of m x'' + c x' + k x = f_const + f0 cos(w t). Returns fn(t) -> (x, v)."""
+    import cmath
+    resonant = False
+    X = 0j
+    if f0:
+        denom = complex(k - m * w * w, c * w)
+        if abs(denom) < 1e-9 * max(k, m * w * w, 1e-300):
+            resonant = True
+        else:
+            X = f0 / denom
+
+    def particular(t):
+        if resonant:
+            return (f_const / k + f0 * t * math.sin(w * t) / (2 * m * w),
+                    f0 * (math.sin(w * t) + w * t * math.cos(w * t)) / (2 * m * w))
+        e = cmath.exp(1j * w * t)
+        return f_const / k + (X * e).real, (1j * w * X * e).real
+
+    p0, dp0 = particular(0.0)
+    a0, b0 = x0 - p0, v0 - dp0
+    disc = c * c - 4 * m * k
+    if abs(disc) < 1e-12 * max(c * c, 4 * m * k):
+        r = -c / (2 * m)
+        A, B = a0, b0 - r * a0
+
+        def homogeneous(t):
+            e = math.exp(r * t)
+            return (A + B * t) * e, (B + r * (A + B * t)) * e
+    else:
+        root = cmath.sqrt(disc)
+        r1, r2 = (-c + root) / (2 * m), (-c - root) / (2 * m)
+        B = (b0 - r1 * a0) / (r2 - r1)
+        A = a0 - B
+
+        def homogeneous(t):
+            e1, e2 = cmath.exp(r1 * t), cmath.exp(r2 * t)
+            return (A * e1 + B * e2).real, (A * r1 * e1 + B * r2 * e2).real
+
+    def at(t):
+        xh, vh = homogeneous(t)
+        xp, vp = particular(t)
+        return xh + xp, vh + vp
+
+    return at
+
+
+def relax(final, start, tau):
+    """u(t) for u' = (final - u)/tau, u(0) = start."""
+    return lambda t: final + (start - final) * math.exp(-t / tau)
+
+
+def driven_relax(amp, w, start, tau):
+    """u(t) for u' = (amp cos(w t) - u)/tau, u(0) = start."""
+    gain = amp / math.sqrt(1 + (w * tau) ** 2)
+    phi = math.atan(w * tau)
+    k0 = start - gain * math.cos(phi)
+    return lambda t: gain * math.cos(w * t - phi) + k0 * math.exp(-t / tau)

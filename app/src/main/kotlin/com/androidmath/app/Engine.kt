@@ -101,13 +101,13 @@ object Engine {
     ): Pair<String, SolveResult> = call(context, "tool", name, operation, text, extra1, extra2)
 
     /**
-     * A physics scenario. [inputs] is the form as JSON: the values with their
-     * units, the option chosen for each effect, and the question.
+     * A physics model. [inputs] is the form as JSON: the known values with their
+     * units (a blank value is an unknown) and the option chosen for each effect.
      */
     suspend fun physics(context: Context, scenario: String, inputs: String): Pair<String, SolveResult> =
         call(context, "physics", scenario, inputs)
 
-    /** The scenarios with their fields, effects, questions and presets. */
+    /** The physics models with their variables, effects and presets. */
     suspend fun physicsCatalog(context: Context): PhysicsCatalog = withContext(dispatcher) {
         try {
             EngineJson.catalog(module(context).callAttr("physics_catalog").toString())

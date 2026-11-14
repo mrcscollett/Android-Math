@@ -2676,415 +2676,430 @@ def test_surface_errors_and_previews():
     assert not json.loads(preview("q", "vector:gradient"))["ok"]
 
 
-# ---- physics scenarios ----------------------------------------------------
+# ---- physics models: knowns -> unknowns --------------------------------------
 
 from deengine import physics, physics_catalog
 from deengine.scenarios import units as punits
 
-
-def _vals(**kw):
-    return {k: {"value": str(v[0]), "unit": v[1]} for k, v in kw.items()}
+_CAT = {s["id"]: s for s in json.loads(physics_catalog())["scenarios"]}
 
 
-def _phys(scenario, values=None, effects=None, question=None, preset=None):
+def _phys(model, values=None, effects=None, preset=None):
     raw = {}
     if values is not None:
-        raw["values"] = values
+        raw["values"] = {k: {"value": str(v[0]), "unit": v[1]} for k, v in values.items()}
         raw["effects"] = effects or {}
-    elif effects is not None:
-        raw["effects"] = effects
     if preset:
         raw["preset"] = preset
-    if question:
-        raw["question"] = question
-    return json.loads(physics(scenario, json.dumps(raw)))
+    return json.loads(physics(model, json.dumps(raw)))
 
 
-def _rk4(deriv, state, t_end, n):
-    """A plain RK4 written here, so the engine is not checked against itself."""
-    h = t_end / n
+def _found(r):
+    return {f["id"]: f["value"] for f in r["physics"]["found"]}
+
+
+def _all_values(model, values, effects):
+    """SI values of everything: what was entered plus what the solver found."""
+    r = _phys(model, values, effects)
+    assert r["ok"], r.get("error")
+    q = {f["id"]: f["quantity"] for f in _CAT[model]["fields"]}
+    out = {k: punits.to_si(float(v[0]), q[k], v[1]) for k, v in values.items()}
+    out.update(_found(r))
+    return out, r
+
+
+def _si(model, values):
+    first = {f["id"]: f["units"][0]["id"] for f in _CAT[model]["fields"]}
+    return {k: (repr(x), first[k]) for k, x in values.items()}
+
+
+def _rk4(deriv, state, t_end, steps=20000):
+    h = t_end / steps
     t = 0.0
-    out = [(0.0, list(state))]
-    for _ in range(n):
+    for _ in range(steps):
         k1 = deriv(t, state)
         k2 = deriv(t + h / 2, [s + h / 2 * k for s, k in zip(state, k1)])
         k3 = deriv(t + h / 2, [s + h / 2 * k for s, k in zip(state, k2)])
         k4 = deriv(t + h, [s + h * k for s, k in zip(state, k3)])
         state = [s + h / 6 * (a + 2 * b + 2 * c + d) for s, a, b, c, d in zip(state, k1, k2, k3, k4)]
         t += h
-        out.append((t, list(state)))
-    return out
+    return state
 
 
-def _at(samples, t, i=0):
-    for (t0, a), (t1, b) in zip(samples, samples[1:]):
-        if t0 <= t <= t1:
-            w = (t - t0) / (t1 - t0)
-            return a[i] + w * (b[i] - a[i])
-    return samples[-1][1][i]
+def _reference(model, eff, V):
+    """The state at the moment, {variable: value}, from the physics written out afresh."""
+    t = V["t"]
+    if model == "falling":
+        ge = V["g"] * (1 - V["rhof"] * V["vol"] / V["m"]) if eff.get("buoyancy") == "on" else V["g"]
+
+        def d(_t, s):
+            acc = -ge * (V["re"] / (V["re"] + s[0])) ** 2 if eff.get("gravity") == "on" else -ge
+            if eff.get("drag") == "linear":
+                acc -= V["b"] / V["m"] * s[1]
+            if eff.get("drag") == "quadratic":
+                acc -= V["c"] / V["m"] * s[1] * abs(s[1])
+            return [s[1], acc]
+        y, v = _rk4(d, [V["y0"], V["v0"]], t)
+        return {"y": y, "v": v}
+    if model == "projectile":
+        wind = V.get("w", 0.0) if eff.get("drag", "none") != "none" else 0.0
+
+        def d(_t, s):
+            rx, ry = s[2] - wind, s[3]
+            if eff.get("drag") == "linear":
+                k = V["b"] / V["m"]
+            elif eff.get("drag") == "quadratic":
+                k = V["c"] / V["m"] * math.hypot(rx, ry)
+            else:
+                k = 0.0
+            return [s[2], s[3], -k * rx, -V["g"] - k * ry]
+        x, y, vx, vy = _rk4(d, [0.0, V["y0"], V["v0"] * math.cos(V["ang"]), V["v0"] * math.sin(V["ang"])], t)
+        return {"x": x, "y": y, "spd": math.hypot(vx, vy)}
+    if model == "spring":
+        def d(tt, s):
+            force = -V["k"] * s[0]
+            if eff.get("damping") == "on":
+                force -= V["c"] * s[1]
+            if eff.get("driving") == "on":
+                force += V["F0"] * math.cos(V["w"] * tt)
+            if eff.get("gravity") == "on":
+                force += V["m"] * V["g"]
+            return [s[1], force / V["m"]]
+        x, v = _rk4(d, [V["x0"], V["v0"]], t)
+        return {"x": x, "v": v}
+    if model == "pendulum":
+        def d(_t, s):
+            pull = math.sin(s[0]) if eff.get("large") == "on" else s[0]
+            return [s[1], -V["g"] / V["L"] * pull - (V["gam"] * s[1] if eff.get("damping") == "on" else 0.0)]
+        th, om = _rk4(d, [V["th0"], V["om0"]], t)
+        return {"th": th, "om": om}
+    if model == "cooling":
+        src = V["s"] if eff.get("source") == "on" else 0.0
+        d = lambda _t, s: [-V["k"] * (s[0] - V["Ta"]) + src]
+        return {"T": _rk4(d, [V["T0"]], t)[0], "T2": _rk4(d, [V["T0"]], V["t2"])[0]}
+    if model == "decay":
+        sign = 1.0 if eff.get("kind") == "growth" else -1.0
+        d = lambda _t, s: [sign * V["lam"] * s[0]]
+        return {"frac": _rk4(d, [1.0], t)[0], "N2": V["N0"] * _rk4(d, [1.0], V["t2"])[0]}
+    if model == "rc":
+        rs = V["R"] + (V["r"] if eff.get("internal") == "on" else 0.0)
+
+        def source(tt):
+            if eff.get("source") == "battery":
+                return V["V"]
+            if eff.get("source") == "ac":
+                return V["vamp"] * math.cos(2 * math.pi * V["freq"] * tt)
+            return 0.0
+        # Current into the capacitor = current through the series resistance minus the leak.
+        d = lambda tt, s: [((source(tt) - s[0]) / rs - (s[0] / V["rl"] if eff.get("leak") == "on" else 0.0)) / V["C"]]
+        vc = _rk4(d, [V["vc0"]], t)[0]
+        return {"vc": vc, "q": V["C"] * vc, "i": (source(t) - vc) / rs, "ec": 0.5 * V["C"] * vc ** 2}
+    if model == "rl":
+        rs = V["R"] + (V["r"] if eff.get("internal") == "on" else 0.0)
+
+        def source(tt):
+            if eff.get("source") == "battery":
+                return V["V"]
+            if eff.get("source") == "ac":
+                return V["vamp"] * math.cos(2 * math.pi * V["freq"] * tt)
+            return 0.0
+        i = _rk4(lambda tt, s: [(source(tt) - rs * s[0]) / V["L"]], [V["i0"]], t)[0]
+        return {"i": i, "vl": source(t) - rs * i, "el": 0.5 * V["L"] * i * i}
+    raise AssertionError(model)
 
 
-def _curve_matches(result, reference, tol=2e-4):
-    curve = result["physics"]["curve"]
-    scale = max(abs(p[1]) for p in curve) or 1.0
-    for t, y in curve[10::23]:
-        assert abs(y - reference(t)) < tol * scale, (t, y, reference(t))
-
-
-FALL_CASES = [
-    # (mass kg, drag, coefficient, v0, buoyancy (rho_f, vol) or None, h0)
-    (80.0, "none", None, 0.0, None, 500.0),
-    (80.0, "linear", 12.0, 0.0, None, 500.0),
-    (80.0, "linear", 12.0, 30.0, None, 2000.0),
-    (0.145, "quadratic", 0.0009, 0.0, None, 60.0),
-    (0.145, "quadratic", 0.0009, 60.0, None, 300.0),      # starts above terminal speed
-    (80.0, "quadratic", 0.3, 5.0, (1.225, 0.08), 3000.0),
-    (2.0, "linear", 0.8, -6.0, None, 40.0),               # thrown upward
-    (0.145, "quadratic", 0.0009, -15.0, None, 60.0),      # thrown upward: numerical path
+PHYSICS_CASES = [
+    ("falling", {}, dict(g=(9.81, "m/s2"), v0=(12, "m/s"), y0=(30, "m"), t=(1.7, "s"))),
+    ("falling", {"drag": "linear"}, dict(m=(2, "kg"), g=(9.81, "m/s2"), v0=(5, "m/s"), y0=(40, "m"),
+                                         b=(0.8, "kg/s"), t=(2.2, "s"))),
+    ("falling", {"drag": "quadratic"}, dict(m=(80, "kg"), g=(9.81, "m/s2"), v0=(0, "m/s"), y0=(900, "m"),
+                                            c=(0.3, "kg/m"), t=(6, "s"))),
+    ("falling", {"drag": "quadratic"}, dict(m=(0.5, "kg"), g=(9.81, "m/s2"), v0=(15, "m/s"), y0=(3, "m"),
+                                            c=(0.01, "kg/m"), t=(2.5, "s"))),
+    ("falling", {"drag": "linear", "buoyancy": "on"},
+     dict(m=(3, "kg"), g=(9.81, "m/s2"), v0=(0, "m/s"), y0=(20, "m"), b=(2, "kg/s"), rhof=(1000, "kg/m3"),
+          vol=(0.001, "m3"), t=(1.5, "s"))),
+    ("falling", {"gravity": "on"}, dict(g=(9.81, "m/s2"), v0=(0, "m/s"), y0=(400, "km"), re=(6371, "km"),
+                                        t=(100, "s"))),
+    ("projectile", {}, dict(v0=(20, "m/s"), ang=(40, "deg"), y0=(1.5, "m"), g=(9.81, "m/s2"), t=(1.1, "s"))),
+    ("projectile", {"drag": "linear", "wind": "on"},
+     dict(v0=(30, "m/s"), ang=(35, "deg"), y0=(0, "m"), g=(9.81, "m/s2"), m=(0.4, "kg"), b=(0.05, "kg/s"),
+          w=(-4, "m/s"), t=(1.3, "s"))),
+    ("projectile", {"drag": "quadratic"},
+     dict(v0=(40, "m/s"), ang=(25, "deg"), y0=(1, "m"), g=(9.81, "m/s2"), m=(0.145, "kg"), c=(0.0012, "kg/m"),
+          t=(1.0, "s"))),
+    ("spring", {}, dict(m=(0.5, "kg"), k=(20, "N/m"), x0=(0.1, "m"), v0=(0.3, "m/s"), t=(0.4, "s"))),
+    ("spring", {"damping": "on"}, dict(m=(400, "kg"), k=(40000, "N/m"), x0=(0.05, "m"), v0=(0, "m/s"),
+                                       c=(3500, "kg/s"), t=(0.3, "s"))),
+    ("spring", {"damping": "on", "driving": "on", "gravity": "on"},
+     dict(m=(2, "kg"), k=(50, "N/m"), x0=(0.02, "m"), v0=(0.1, "m/s"), c=(3, "kg/s"), F0=(4, "N"),
+          w=(6, "rad/s"), g=(9.81, "m/s2"), t=(0.9, "s"))),
+    ("pendulum", {}, dict(L=(1.2, "m"), g=(9.81, "m/s2"), th0=(8, "deg"), om0=(0.1, "rad/s"), t=(0.7, "s"))),
+    ("pendulum", {"large": "on"}, dict(L=(2.5, "m"), g=(9.81, "m/s2"), th0=(60, "deg"), om0=(0, "rad/s"),
+                                       t=(0.6, "s"))),
+    ("pendulum", {"large": "on", "damping": "on"},
+     dict(L=(0.8, "m"), g=(9.81, "m/s2"), th0=(50, "deg"), om0=(0.2, "rad/s"), gam=(0.4, "1/s"), t=(1.2, "s"))),
+    ("cooling", {}, dict(T0=(90, "C"), Ta=(22, "C"), k=(0.05, "1/min"), t=(7, "min"), t2=(15, "min"))),
+    ("cooling", {"source": "on"}, dict(T0=(25, "C"), Ta=(20, "C"), k=(0.05, "1/s"), s=(3, "K/s"), t=(30, "s"),
+                                       t2=(70, "s"))),
+    ("decay", {"kind": "decay"}, dict(th=(8.02, "d"), N0=(400, "MBq"), t=(30, "d"), t2=(50, "d"))),
+    ("decay", {"kind": "growth"}, dict(th=(20, "min"), N0=(1000, ""), t=(90, "min"), t2=(120, "min"))),
+    ("rc", {"source": "battery"}, dict(R=(2000, "ohm"), C=(120, "uF"), V=(300, "V"), vc0=(20, "V"), t=(0.3, "s"))),
+    ("rc", {"source": "battery", "internal": "on", "leak": "on"},
+     dict(R=(1000, "ohm"), C=(10, "uF"), V=(12, "V"), vc0=(0, "V"), r=(50, "ohm"), rl=(0.1, "Mohm"), t=(0.02, "s"))),
+    ("rc", {"source": "discharge"}, dict(R=(50, "ohm"), C=(32, "uF"), vc0=(5000, "V"), t=(0.002, "s"))),
+    ("rc", {"source": "ac", "internal": "on"},
+     dict(R=(1000, "ohm"), C=(0.1, "uF"), vamp=(2, "V"), freq=(3000, "Hz"), vc0=(0.5, "V"), r=(100, "ohm"),
+          t=(0.00013, "s"))),
+    ("rl", {"source": "battery"}, dict(L=(200, "mH"), R=(240, "ohm"), V=(12, "V"), i0=(0.01, "A"), t=(0.001, "s"))),
+    ("rl", {"source": "none", "internal": "on"}, dict(L=(30, "mH"), R=(15, "ohm"), r=(2, "ohm"), i0=(3, "A"),
+                                                      t=(0.002, "s"))),
+    ("rl", {"source": "ac"}, dict(L=(50, "mH"), R=(10, "ohm"), vamp=(325, "V"), freq=(50, "Hz"), i0=(1, "A"),
+                                  t=(0.004, "s"))),
 ]
 
 
-@pytest.mark.parametrize("m,drag,coef,v0,buoy,h0", FALL_CASES)
-def test_falling_matches_independent_integration(m, drag, coef, v0, buoy, h0):
-    g = 9.81
-    values = _vals(m=(m, "kg"), g=(g, "m/s2"), v0=(v0, "m/s"), h0=(h0, "m"))
-    effects = {"drag": drag}
-    if drag == "linear":
-        values.update(_vals(b=(coef, "kg/s")))
-    elif drag == "quadratic":
-        values.update(_vals(c=(coef, "kg/m")))
-    lift = 0.0
-    if buoy:
-        values.update(_vals(rho_f=(buoy[0], "kg/m3"), vol=(buoy[1], "m3")))
-        effects["buoyancy"] = "on"
-        lift = buoy[0] * buoy[1] * g / m
+def _close(a, b, scale=1.0, rel=2e-4):
+    return abs(a - b) <= rel * max(abs(a), abs(b)) + 1e-6 * scale
 
-    def deriv(t, st):
-        v = st[0]
-        a = g - lift
-        if drag == "linear":
-            a -= coef * v / m
-        elif drag == "quadratic":
-            a -= coef * v * abs(v) / m
-        return [a, v]
 
-    r = _phys("falling", values, effects, "ground")
+@pytest.mark.parametrize("model,eff,knowns", PHYSICS_CASES)
+def test_physics_solution_matches_independent_integration(model, eff, knowns):
+    V, r = _all_values(model, knowns, eff)
+    assert r["methods"][0]["verified"] is True, r["methods"][0]["verify_note"]
+    assert not r["physics"]["missing"], r["physics"]["missing"]
+    ref = _reference(model, eff, V)
+    for name, want in ref.items():
+        assert name in V, name
+        scale = max(abs(x) for x in ref.values()) or 1.0
+        assert _close(V[name], want, scale, 5e-4), (name, V[name], want)
+
+
+@pytest.mark.parametrize("model,eff,knowns", PHYSICS_CASES)
+def test_physics_any_variable_can_be_the_unknown(model, eff, knowns):
+    """Blank each variable in turn: the solver must recover it from all the others."""
+    V, _ = _all_values(model, knowns, eff)
+    scale = {f["id"]: abs(f["typical"]) for f in _CAT[model]["fields"]}
+    for unknown in V:
+        rest = {k: x for k, x in V.items() if k != unknown}
+        r = _phys(model, _si(model, rest), eff)
+        assert r["ok"], (unknown, r.get("error"))
+        got = _found(r)
+        assert unknown in got, (unknown, r["physics"]["missing"])
+        assert _close(got[unknown], V[unknown], scale[unknown]), (unknown, got[unknown], V[unknown])
+
+
+@pytest.mark.parametrize("model,eff,knowns,blank", [
+    ("projectile", {}, PHYSICS_CASES[6][2], ("ang", "t")),
+    ("rc", {"source": "battery"}, PHYSICS_CASES[19][2], ("R", "tau")),
+    ("rc", {"source": "battery"}, PHYSICS_CASES[19][2], ("C", "t")),
+    ("spring", {"damping": "on"}, PHYSICS_CASES[10][2], ("m", "c")),
+    ("cooling", {}, PHYSICS_CASES[15][2], ("k", "t2")),
+    ("falling", {"drag": "linear"}, PHYSICS_CASES[1][2], ("b", "t")),
+    ("rl", {"source": "battery"}, PHYSICS_CASES[23][2], ("L", "V")),
+    ("decay", {"kind": "decay"}, PHYSICS_CASES[17][2], ("th", "t2")),
+])
+def test_physics_two_unknowns_at_once(model, eff, knowns, blank):
+    V, _ = _all_values(model, knowns, eff)
+    rest = {k: x for k, x in V.items() if k not in blank}
+    r = _phys(model, _si(model, rest), eff)
     assert r["ok"], r.get("error")
-    t_end = r["physics"]["t_max"]
-    ref = _rk4(deriv, [v0, 0.0], t_end, 20000)
-    _curve_matches(r, lambda t: _at(ref, t, 0))
-    # The event: distance fallen equals the starting height at the reported time.
-    assert abs(_at(ref, t_end, 1) - h0) < 1e-3 * h0
-    marker = r["physics"]["marker"]
-    assert abs(marker["t"] - t_end) < 1e-9 and abs(marker["y"] - _at(ref, t_end, 0)) < 1e-3 * (1 + abs(marker["y"]))
-    assert all(mm["verified"] is True for mm in r["methods"] if mm["applicable"])
-    assert r["methods"][0]["id"] == ("numeric" if (drag == "quadratic" and v0 < 0) else "exact")
-    if drag == "none" and not buoy:
-        assert [mm["id"] for mm in r["methods"]] == ["exact", "energy"]
-        assert r["physics"]["ideal"] == []
-    else:
-        assert len(r["physics"]["ideal"]) > 100
+    got = _found(r)
+    for name in blank:
+        assert name in got and _close(got[name], V[name], 1.0, 1e-3), (name, got.get(name), V[name])
 
 
-def test_falling_terminal_velocity_and_inference_round_trip():
-    lin = _phys("falling", _vals(m=(80, "kg"), g=(9.81, "m/s2"), b=(12, "kg/s")), {"drag": "linear"}, "terminal")
-    assert abs(lin["physics"]["curve"][-1][1] - 80 * 9.81 / 12) < 0.01 * 65.4
-    assert "65.4 m/s" in lin["summary"]
-    quad = _phys("falling", _vals(m=(80, "kg"), g=(9.81, "m/s2"), rho=(1.225, "kg/m3"), cd=(1.0, ""),
-                                  area=(0.5, "m2")), {"drag": "quadratic"}, "terminal")
-    vt = math.sqrt(80 * 9.81 / (0.5 * 1.225 * 1.0 * 0.5))
-    assert punits.text(vt, "speed") in quad["summary"]
-    assert "Work out the drag coefficient" in [s["title"] for s in quad["methods"][0]["steps"]]
-    # Feed the terminal speed back in and recover the coefficient.
-    back = _phys("falling", _vals(m=(80, "kg"), g=(9.81, "m/s2"), vt_meas=(vt, "m/s")), {"drag": "quadratic"}, "infer")
-    assert punits.text(0.5 * 1.225 * 0.5, "drag_quadratic", "kg/m") in back["summary"]
-    back_lin = _phys("falling", _vals(m=(80, "kg"), g=(9.81, "m/s2"), vt_meas=(65.4, "m/s")), {"drag": "linear"}, "infer")
-    assert "12 kg/s" in back_lin["summary"]
+def test_physics_known_answers():
+    f = _found(_phys("falling", preset="thrown"))
+    disc = math.sqrt(20 ** 2 + 2 * 9.81 * 1.5)
+    assert abs(f["tg"] - (20 + disc) / 9.81) < 1e-6 and abs(f["vi"] - disc) < 1e-6
+    assert abs(f["ymax"] - (1.5 + 400 / (2 * 9.81))) < 1e-6
+    sky = _found(_phys("falling", preset="skydiver"))
+    assert abs(sky["vt"] - math.sqrt(80 * 9.81 / (0.5 * 1.225 * 1.0 * 0.5))) < 1e-6
+    kick = _found(_phys("projectile", preset="kick"))
+    assert abs(kick["rng"] - 25 ** 2 * math.sin(math.radians(60)) / 9.81) < 1e-6
+    assert abs(kick["hmax"] - (25 * math.sin(math.radians(30))) ** 2 / (2 * 9.81)) < 1e-6
+    assert abs(_found(_phys("spring", preset="cart"))["k"] - 0.5 * (2 * math.pi) ** 2) < 1e-6
+    assert abs(_found(_phys("spring", preset="door"))["c"] - 2 * math.sqrt(60 * 30)) < 1e-6
+    assert abs(_found(_phys("pendulum", preset="clock"))["L"] - 9.81 / math.pi ** 2) < 1e-9
+    swing = _found(_phys("pendulum", preset="swing"))
+    assert abs(swing["Tex"] / swing["T0"] - 1.0731820) < 1e-6      # known ratio for a 60 degree swing
+    assert abs(_found(_phys("decay", preset="carbon"))["t"] - 2 * 5730 * 31557600) < 1.0
+    assert abs(_found(_phys("rc", preset="flash"))["t"] + 0.24 * math.log(0.05)) < 1e-9
+    assert abs(_found(_phys("rc", preset="timer"))["t"] + math.log(1 - 3.3 / 5)) < 1e-9
+    relay = _found(_phys("rl", preset="relay"))
+    assert abs(relay["t"] + (0.2 / 240) * math.log(1 - 0.035 / 0.05)) < 1e-12
+    coffee = _found(_phys("cooling", preset="coffee"))
+    k = math.log(68 / 53) / 300
+    assert abs(coffee["k"] - k) < 1e-12 and abs(coffee["t2"] - math.log(68 / 38) / k) < 1e-6
 
 
-def test_falling_fraction_at_time_and_limits():
-    values = _vals(m=(80, "kg"), g=(9.81, "m/s2"), v0=(0, "m/s"), b=(12, "kg/s"), fraction=(95, "%"), h0=(4000, "m"))
-    r = _phys("falling", values, {"drag": "linear"}, "fraction")
-    tau = 80 / 12
-    assert abs(r["physics"]["marker"]["t"] - (-tau * math.log(0.05))) < 1e-6
-    at = _phys("falling", dict(values, **_vals(t_query=(3, "s"))), {"drag": "linear"}, "at_time")
-    vt = 80 * 9.81 / 12
-    assert abs(at["physics"]["marker"]["y"] - vt * (1 - math.exp(-3 / tau))) < 1e-9
-    # Drag tending to zero recovers free fall.
-    tiny = _phys("falling", _vals(m=(80, "kg"), g=(9.81, "m/s2"), v0=(0, "m/s"), h0=(100, "m"), b=(1e-9, "kg/s")),
-                 {"drag": "linear"}, "ground")
-    free = _phys("falling", _vals(m=(80, "kg"), g=(9.81, "m/s2"), v0=(0, "m/s"), h0=(100, "m")), {"drag": "none"}, "ground")
-    assert abs(tiny["physics"]["t_max"] - free["physics"]["t_max"]) < 1e-6
-    assert abs(free["physics"]["t_max"] - math.sqrt(200 / 9.81)) < 1e-9
+def test_physics_every_preset_solves():
+    for model, spec in _CAT.items():
+        ids = {f["id"] for f in spec["fields"]}
+        for p in spec["presets"]:
+            assert set(p["values"]) <= ids
+            r = _phys(model, preset=p["id"])
+            assert r["ok"], (model, p["id"], r.get("error"))
+            ph = r["physics"]
+            assert r["kind"] == "physics" and ph["found"], (model, p["id"])
+            assert all(f["text"] and f["label"] for f in ph["found"])
+            assert len(ph["curve"]) > 50 and ph["animation"]["points"], (model, p["id"])
+            steps = r["methods"][0]["steps"]
+            assert steps[0]["title"].startswith("Set up")
+            assert steps[-1]["title"] == "Check" and steps[-1]["kind"] == "check-ok"
+            assert steps[-2]["title"] == "Summary" and steps[-2]["table"]["rows"]
+            assert any(s["title"].startswith("Find the ") for s in steps)
+            assert r["methods"][0]["verified"] is True
 
 
-def test_falling_gravity_varying_with_height():
-    values = _vals(m=(100, "kg"), g=(9.81, "m/s2"), v0=(0, "m/s"), h0=(400, "km"), radius=(6371, "km"))
-    r = _phys("falling", values, {"altitude": "on"}, "ground")
-    assert r["methods"][0]["id"] == "numeric" and r["methods"][0]["verified"] is True
-    R, h = 6.371e6, 4e5
-    v_exact = math.sqrt(2 * 9.81 * R * h / (R + h))      # energy conservation in an inverse-square field
-    assert abs(r["physics"]["marker"]["y"] - v_exact) < 1e-4 * v_exact
-    assert "numerically" in " ".join(s["title"] for s in r["methods"][0]["steps"]).lower()
+def test_physics_several_solutions_are_reported():
+    r = _phys("falling", dict(g=(9.81, "m/s2"), v0=(20, "m/s"), y0=(0, "m"), y=(15, "m")), {})
+    f = _found(r)
+    roots = sorted([(20 - math.sqrt(400 - 2 * 9.81 * 15)) / 9.81, (20 + math.sqrt(400 - 2 * 9.81 * 15)) / 9.81])
+    assert abs(f["t"] - roots[0]) < 1e-9
+    step_text = next(s["text"] for s in r["methods"][0]["steps"] if s["title"] == "Find the time")
+    assert "Other values that also fit" in step_text and "3.087" in step_text
+    jump = _phys("projectile", preset="jump")
+    angle = _found(jump)["ang"]
+    assert abs(math.degrees(angle) - 30.21) < 0.01
+    text = next(s["text"] for s in jump["methods"][0]["steps"] if s["title"] == "Find the launch angle")
+    assert "59.79" in text
+    # With the velocity at that moment also known, the matching time is chosen.
+    later = _phys("falling", dict(g=(9.81, "m/s2"), v0=(20, "m/s"), y0=(0, "m"), y=(15, "m"),
+                                  v=(repr(20 - 9.81 * roots[1]), "m/s")), {})
+    assert abs(_found(later)["t"] - roots[1]) < 1e-6
 
 
-SPRING_CASES = [
-    # m, k, c, F0, w (rad/s), g, x0, v0
-    (0.5, 20.0, 0.0, 0.0, 0.0, 0.0, 0.1, 0.0),
-    (0.5, 20.0, 0.0, 0.0, 0.0, 0.0, 0.05, -0.4),
-    (400.0, 40000.0, 3500.0, 0.0, 0.0, 0.0, 0.05, 0.0),          # underdamped
-    (30.0, 60.0, 2 * math.sqrt(30 * 60.0), 0.0, 0.0, 0.0, 0.6, 0.0),  # critically damped
-    (2.0, 8.0, 20.0, 0.0, 0.0, 0.0, 0.3, 1.0),                    # overdamped
-    (60.0, 60000.0, 600.0, 100.0, 31.4, 0.0, 0.0, 0.0),           # damped and driven
-    (1.0, 16.0, 0.0, 2.0, 4.0, 0.0, 0.0, 0.0),                    # driven at resonance, undamped
-    (1.0, 16.0, 0.0, 2.0, 3.0, 0.0, 0.1, 0.0),                    # driven off resonance, undamped
-    (0.5, 20.0, 0.4, 0.0, 0.0, 9.81, 0.0, 0.0),                   # vertical spring released at natural length
-    (0.5, 20.0, 0.4, 1.5, 5.0, 9.81, 0.1, 0.2),                   # everything on
-]
+def test_physics_reports_what_cannot_be_found():
+    r = _phys("falling", dict(g=(9.81, "m/s2"), m=(80, "kg"), v0=(0, "m/s"), y0=(100, "m"),
+                              rho=(1.225, "kg/m3"), cd=(1.0, "")), {"drag": "quadratic"})
+    assert r["ok"] is False or r["physics"]["missing"]
+    r = _phys("spring", dict(m=(2, "kg"), x0=(0.1, "m"), v0=(0, "m/s"), T=(1.5, "s")), {"damping": "on"})
+    assert r["ok"]
+    missing = {m["id"]: m["reason"] for m in r["physics"]["missing"]}
+    assert "k" in _found(r) and "c" in missing
+    assert "damping ratio" in missing["c"] or "decay time" in missing["c"]
+    assert "t" not in missing           # nothing about the moment was entered, so it is not asked for
+    r = _phys("spring", dict(m=(2, "kg"), x0=(0.1, "m"), v0=(0, "m/s"), T=(1.5, "s"), t=(1, "s")), {"damping": "on"})
+    missing = {m["id"]: m["reason"] for m in r["physics"]["missing"]}
+    assert "x" in missing and "damping coefficient" in missing["x"]
+    nothing = _phys("rc", dict(vc0=(0, "V")), {"source": "battery"})
+    assert not nothing["ok"] and "cannot be found" in nothing["error"]
+    empty = _phys("rc", dict(vc0=("", "V")), {"source": "battery"})
+    assert not empty["ok"] and "Enter the values you know" in empty["error"]
+    never = _phys("falling", dict(g=(9.81, "m/s2"), v0=(5, "m/s"), y0=(0, "m"), y=(15, "m")), {})
+    assert "never reached" in {m["id"]: m["reason"] for m in never["physics"]["missing"]}["t"]
+    above = _phys("rc", dict(R=(1, "kohm"), C=(1, "uF"), V=(5, "V"), vc0=(0, "V"), vc=(6, "V")), {"source": "battery"})
+    assert "never reached" in {m["id"]: m["reason"] for m in above["physics"]["missing"]}["t"]
 
 
-@pytest.mark.parametrize("m,k,c,F0,w,g,x0,v0", SPRING_CASES)
-def test_spring_matches_independent_integration(m, k, c, F0, w, g, x0, v0):
-    values = _vals(m=(m, "kg"), k=(k, "N/m"), x0=(x0, "m"), v0=(v0, "m/s"))
-    effects = {}
-    if c:
-        values.update(_vals(c=(c, "kg/s")))
-        effects["damping"] = "on"
-    if F0:
-        values.update(_vals(F0=(F0, "N"), w=(w, "rad/s")))
-        effects["driving"] = "on"
-    if g:
-        values.update(_vals(g=(g, "m/s2")))
-        effects["gravity"] = "on"
-    r = _phys("spring", values, effects, "motion")
-    assert r["ok"], r.get("error")
-    t_end = r["physics"]["t_max"]
-    ref = _rk4(lambda t, st: [st[1], (F0 * math.cos(w * t) + m * g - c * st[1] - k * st[0]) / m],
-               [x0, v0], t_end, 60000)
-    _curve_matches(r, lambda t: _at(ref, t, 0), tol=5e-4)
-    assert r["physics"]["curve"][0][1] == pytest.approx(x0, abs=1e-12)
-    assert all(mm["verified"] is True for mm in r["methods"])
-    if c and not F0:
-        e = r["physics"]["energy"]            # energy lost equals the work done against damping
-        assert e["initial"] - e["final"] == pytest.approx(e["dissipated"], rel=1e-5)
-    if not (c or F0 or g):
-        assert [mm["id"] for mm in r["methods"]] == ["exact", "energy"]
+def test_physics_inconsistent_and_impossible_values():
+    r = _phys("falling", dict(g=(9.81, "m/s2"), v0=(0, "m/s"), y0=(10, "m"), tg=(1, "s")), {})
+    assert not r["ok"] and "do not fit together" in r["error"] and "30%" in r["error"]
+    assert "time to reach the ground" in r["error"]
+    r = _phys("rc", dict(R=(1, "kohm"), C=(1, "uF"), tau=(5, "ms"), vc0=(0, "V")), {"source": "discharge"})
+    assert not r["ok"] and "do not fit together" in r["error"]
+    # Values that agree to within rounding are accepted.
+    ok = _phys("rc", dict(R=(1, "kohm"), C=(1, "uF"), tau=(1.004, "ms"), vc0=(5, "V"), t=(1, "ms")), {"source": "discharge"})
+    assert ok["ok"] and "vc" in _found(ok)
+    assert "Mass must be greater than zero" in _phys("falling", dict(g=(9.81, "m/s2"), m=(-2, "kg")), {})["error"]
+    assert "outside the range" in _phys("projectile", dict(v0=(10, "m/s"), ang=(120, "deg"), g=(9.81, "m/s2")), {})["error"]
+    assert "must be a number" in _phys("rc", dict(R=("abc", "ohm")), {"source": "battery"})["error"]
+    assert "cannot be used" in _phys("rc", dict(R=(1, "furlong")), {"source": "battery"})["error"]
+    assert "Unknown physics model" in json.loads(physics("warp", ""))["error"]
+    assert "could not be read" in json.loads(physics("rc", "{oops"))["error"]
 
 
-def test_spring_frequency_regimes_and_resonance():
-    f = _phys("spring", _vals(m=(0.5, "kg"), k=(20, "N/m")), {}, "frequency")
-    assert punits.text(math.sqrt(40) / (2 * math.pi), "frequency") in f["summary"]
-    for c, word in ((3500, "underdamped"), (8000, "critically damped"), (20000, "overdamped")):
-        r = _phys("spring", _vals(m=(400, "kg"), k=(40, "kN/m"), c=(c, "kg/s")), {"damping": "on"}, "frequency")
-        assert word in r["summary"], r["summary"]
-    s = _phys("spring", preset="washer", question="steady")
-    m, k, c, F0, w = 60.0, 60000.0, 600.0, 100.0, 2 * math.pi * 5
-    X = F0 / math.hypot(k - m * w * w, c * w)
-    assert punits.text(X, "length", "cm") in s["summary"]
-    assert "Resonance" in s["summary"]
-    assert "driving force" in _phys("spring", preset="cart", question="steady")["error"]
-    assert "no steady state" in _phys("spring", _vals(m=(1, "kg"), k=(16, "N/m"), F0=(2, "N"), w=(4, "rad/s")),
-                                      {"driving": "on"}, "steady")["error"]
-
-
-def test_spring_decay_and_inference_round_trips():
-    values = _vals(m=(400, "kg"), k=(40, "kN/m"), x0=(5, "cm"), v0=(0, "m/s"), c=(3500, "kg/s"), fraction=(5, "%"))
-    d = _phys("spring", values, {"damping": "on"}, "decay")
-    t = d["physics"]["marker"]["t"]
-    assert t == pytest.approx(-math.log(0.05) / (3500 / 800), rel=1e-9)
-    # A measured decay gives the damping back.
-    back = _phys("spring", _vals(m=(400, "kg"), k=(40, "kN/m"), fraction=(5, "%"), t_query=(t, "s")), {}, "infer_c")
-    assert "3500 N" in back["summary"]
-    # A measured period gives the spring constant back, with and without damping.
-    wd = math.sqrt(40000 / 400 - (3500 / 800) ** 2)
-    k_back = _phys("spring", _vals(m=(400, "kg"), c=(3500, "kg/s"), T_meas=(2 * math.pi / wd, "s")),
-                   {"damping": "on"}, "infer_k")
-    assert "40 kN/m" in k_back["summary"]
-    k_plain = _phys("spring", _vals(m=(0.5, "kg"), T_meas=(2 * math.pi / math.sqrt(40), "s")), {}, "infer_k")
-    assert "20 N/m" in k_plain["summary"]
-    # Damping tending to zero recovers the undamped motion.
-    tiny = _phys("spring", _vals(m=(0.5, "kg"), k=(20, "N/m"), x0=(0.1, "m"), v0=(0, "m/s"), c=(1e-9, "kg/s")),
-                 {"damping": "on"}, "motion")
-    w0 = math.sqrt(40)
-    for tt, y in tiny["physics"]["curve"][::40]:
-        assert abs(y - 0.1 * math.cos(w0 * tt)) < 1e-7
-    assert "never shrinks" in _phys("spring", preset="cart", question="decay")["error"]
-
-
-RC_CASES = [
-    # R, C, V, vc0, source, r_int, r_leak, freq
-    (2000.0, 120e-6, 300.0, 0.0, "battery", 0.0, 0.0, 0.0),
-    (2000.0, 120e-6, 300.0, 50.0, "battery", 150.0, 0.0, 0.0),
-    (2000.0, 120e-6, 300.0, 0.0, "battery", 0.0, 30000.0, 0.0),
-    (2000.0, 120e-6, 300.0, 400.0, "battery", 100.0, 50000.0, 0.0),
-    (50.0, 32e-6, 0.0, 5000.0, "discharge", 0.0, 0.0, 0.0),
-    (50.0, 32e-6, 0.0, 5000.0, "discharge", 0.0, 400.0, 0.0),
-    (1000.0, 100e-9, 1.0, 0.0, "ac", 0.0, 0.0, 5000.0),
-    (1000.0, 100e-9, 2.0, 0.5, "ac", 200.0, 20000.0, 800.0),
-]
-
-
-@pytest.mark.parametrize("R,C,V,vc0,source,r_int,r_leak,freq", RC_CASES)
-def test_rc_matches_independent_integration(R, C, V, vc0, source, r_int, r_leak, freq):
-    values = _vals(R=(R, "ohm"), C=(C, "F"), V=(V, "V"), vc0=(vc0, "V"))
-    effects = {"source": source}
-    if r_int:
-        values.update(_vals(r_int=(r_int, "ohm")))
-        effects["internal"] = "on"
-    if r_leak:
-        values.update(_vals(r_leak=(r_leak, "ohm")))
-        effects["leak"] = "on"
-    if source == "ac":
-        values.update(_vals(freq=(freq, "Hz")))
-    r = _phys("rc", values, effects, "motion")
-    assert r["ok"], r.get("error")
-    Rt = R + (r_int if source != "discharge" else 0.0)
-    w = 2 * math.pi * freq
-
-    def deriv(t, st):
-        vs = {"battery": V, "discharge": 0.0, "ac": V * math.cos(w * t)}[source]
-        return [(vs - st[0]) / (Rt * C) - (st[0] / (r_leak * C) if r_leak else 0.0)]
-
-    t_end = r["physics"]["t_max"]
-    ref = _rk4(deriv, [vc0], t_end, 40000)
-    _curve_matches(r, lambda t: _at(ref, t, 0))
-    assert r["methods"][0]["verified"] is True
-    assert (len(r["physics"]["ideal"]) > 0) == bool((r_int and source != "discharge") or r_leak)
-
-
-def test_rc_times_energy_and_inference():
-    flash = _vals(R=(2, "kohm"), C=(120, "uF"), V=(300, "V"), vc0=(0, "V"))
-    tau = 2000 * 120e-6
-    assert "240 ms" in _phys("rc", flash, {}, "tau")["summary"]
-    frac = _phys("rc", dict(flash, **_vals(fraction=(95, "%"))), {}, "fraction")
-    assert frac["physics"]["marker"]["t"] == pytest.approx(-tau * math.log(0.05), rel=1e-12)
-    tgt = _phys("rc", dict(flash, **_vals(v_target=(200, "V"))), {}, "target")
-    assert tgt["physics"]["marker"]["t"] == pytest.approx(tau * math.log(3.0), rel=1e-12)
-    assert "never reaches" in _phys("rc", dict(flash, **_vals(v_target=(400, "V"))), {}, "target")["error"]
-    # Energy: the battery's energy is the stored energy plus the heat, half each from empty.
-    e = _phys("rc", flash, {}, "energy")["physics"]["energy"]
-    assert e["supplied"] == pytest.approx(120e-6 * 300 ** 2, rel=1e-4)
-    assert e["stored_final"] == pytest.approx(0.5 * 120e-6 * 300 ** 2, rel=1e-4)
-    assert e["supplied"] == pytest.approx(e["heat"] + e["stored_final"] - e["stored_initial"], rel=1e-6)
-    leaky = _phys("rc", dict(flash, **_vals(r_leak=(30, "kohm"), r_int=(100, "ohm"))),
-                  {"leak": "on", "internal": "on"}, "energy")
-    el = leaky["physics"]["energy"]
-    assert el["supplied"] == pytest.approx(el["heat"] + el["leak"] + el["stored_final"], rel=1e-6)
-    assert leaky["methods"][0]["verified"] is True
-    d = _phys("rc", preset="defib", question="energy")["physics"]["energy"]
-    assert d["heat"] == pytest.approx(0.5 * 32e-6 * 5000 ** 2, rel=1e-4)
-    # Round trips: a measured charging time gives R and C back, also with the extra effects.
-    t95 = -tau * math.log(0.05)
-    assert "2 kΩ" in _phys("rc", _vals(C=(120, "uF"), fraction=(95, "%"), t_query=(t95, "s")), {}, "infer_r")["summary"]
-    assert "120 µF" in _phys("rc", _vals(R=(2, "kohm"), fraction=(95, "%"), t_query=(t95, "s")), {}, "infer_c")["summary"]
-    Rt, RL = 2100.0, 30000.0
-    tau2 = Rt * RL / (Rt + RL) * 120e-6
-    back = _phys("rc", _vals(C=(120, "uF"), fraction=(50, "%"), t_query=(tau2 * math.log(2), "s"),
-                             r_int=(100, "ohm"), r_leak=(30, "kohm")), {"internal": "on", "leak": "on"}, "infer_r")
-    assert "2 kΩ" in back["summary"]
-    # A very large leakage resistance changes nothing.
-    big = _phys("rc", dict(flash, **_vals(r_leak=(1e15, "ohm"))), {"leak": "on"}, "motion")
-    plain = _phys("rc", flash, {}, "motion")
-    assert big["physics"]["curve"][200][1] == pytest.approx(plain["physics"]["curve"][200][1], rel=1e-9)
-
-
-def test_rc_ac_steady_state():
-    r = _phys("rc", preset="filter", question="steady")
-    tau, w = 1000 * 100e-9, 2 * math.pi * 5000
-    amp = 1 / math.sqrt(1 + (w * tau) ** 2)
-    assert punits.text(amp, "voltage", "V") in r["summary"]
-    assert punits.text(math.atan(w * tau), "angle", "deg") in r["summary"]
-    assert "1.592 kHz" in r["summary"]
-    assert "AC source" in _phys("rc", preset="flash", question="steady")["error"]
-
-
-def test_units_conversions_and_formatting():
+def test_physics_units():
     for quantity in punits.QUANTITIES:
         for choice in punits.choices(quantity):
-            si = punits.to_si(3.7, quantity, choice["id"])
-            assert punits.from_si(si, quantity, choice["id"]) == pytest.approx(3.7, rel=1e-12)
-    assert punits.to_si(100, "temperature", "C") == pytest.approx(373.15)
-    assert punits.to_si(212, "temperature", "F") == pytest.approx(373.15)
-    assert punits.from_si(273.15, "temperature", "F") == pytest.approx(32.0)
-    assert punits.to_si(60, "speed", "mph") == pytest.approx(26.8224)
-    assert punits.to_si(1, "angular_frequency", "Hz") == pytest.approx(2 * math.pi)
-    assert punits.text(1.2e-4, "capacitance") == "120 µF"
-    assert punits.text(2400, "resistance") == "2.4 kΩ"
-    assert punits.text(0.9999999, "time") == "1 s"
-    assert punits.both(53.4, "speed", "km/h") == "192.2 km/h (53.4 m/s)"
-    assert punits.number(123456789) == "1.235×10^8" and punits.number(0) == "0"
-    with pytest.raises(Exception):
-        punits.to_si(1, "mass", "V")
+            assert abs(punits.from_si(punits.to_si(3.7, quantity, choice["id"]), quantity, choice["id"]) - 3.7) < 1e-9
+    assert abs(punits.to_si(100, "temperature", "C") - 373.15) < 1e-9
+    assert abs(punits.to_si(212, "temperature", "F") - 373.15) < 1e-9
+    a = _found(_phys("falling", dict(m=(80, "kg"), g=(9.81, "m/s2"), v0=(0, "m/s"), y0=(4000, "m"),
+                                     c=(0.3, "kg/m")), {"drag": "quadratic"}))
+    b = _found(_phys("falling", dict(m=(176.36981, "lb"), g=(1.0003262, "g0"), v0=(0, "mph"), y0=(4, "km"),
+                                     c=(300, "g/m")), {"drag": "quadratic"}))
+    for key in ("vt", "tg", "vi"):
+        assert abs(a[key] - b[key]) < 1e-5 * a[key], key
+    c1 = _found(_phys("cooling", dict(T0=(90, "C"), Ta=(22, "C"), k=(0.05, "1/min"), T=(60, "C")), {}))
+    c2 = _found(_phys("cooling", dict(T0=(194, "F"), Ta=(295.15, "K"), k=(3, "1/h"), T=(140, "F")), {}))
+    assert abs(c1["t"] - c2["t"]) < 1e-6 * c1["t"]
+    # A found value is shown in the unit chosen for its (blank) row.
+    r = _phys("rc", dict(R=(2, "kohm"), C=(120, "uF"), V=(300, "V"), vc0=(0, "V"), vc=(285, "V"), t=("", "ms")),
+              {"source": "battery"})
+    shown = {f["id"]: f["text"] for f in r["physics"]["found"]}
+    assert shown["t"].startswith("719 ms")
 
 
-def test_physics_mixed_units_give_the_same_answer():
-    si = _phys("falling", _vals(m=(80, "kg"), g=(9.81, "m/s2"), v0=(0, "m/s"), h0=(1000, "m"), b=(12, "kg/s")),
-               {"drag": "linear"}, "ground")
-    mixed = _phys("falling", _vals(m=(80000, "g"), g=(9.81 / 0.3048, "ft/s2"), v0=(0, "mph"), h0=(1, "km"),
-                                   b=(12000, "g/s")), {"drag": "linear"}, "ground")
-    assert mixed["physics"]["t_max"] == pytest.approx(si["physics"]["t_max"], rel=1e-9)
-    assert "km/h" not in si["summary"]
-    kmh = _phys("falling", _vals(m=(80, "kg"), g=(9.81, "m/s2"), v0=(0, "km/h"), h0=(1000, "m"), b=(12, "kg/s")),
-                {"drag": "linear"}, "ground")
-    assert "km/h" in kmh["summary"] and "m/s" in kmh["summary"]      # shown in the user's unit and in SI
+def test_physics_shooting_for_a_parameter():
+    # The drag coefficient from the speed 10 s into a skydive (no closed form to rearrange).
+    base, _ = _all_values("falling", dict(m=(80, "kg"), g=(9.81, "m/s2"), v0=(0, "m/s"), y0=(4000, "m"),
+                                          c=(0.34, "kg/m"), t=(10, "s")), {"drag": "quadratic"})
+    r = _phys("falling", dict(m=(80, "kg"), g=(9.81, "m/s2"), v0=(0, "m/s"), y0=(4000, "m"), t=(10, "s"),
+                              v=(repr(base["v"]), "m/s")), {"drag": "quadratic"})
+    assert abs(_found(r)["c"] - 0.34) < 1e-6
+    # A projectile's drag coefficient from where it is after one second (numerical trajectory).
+    V, _ = _all_values(*PHYSICS_CASES[8][:1], PHYSICS_CASES[8][2], PHYSICS_CASES[8][1])
+    rest = {k: V[k] for k in ("v0", "ang", "y0", "g", "m", "t", "x")}
+    r = _phys("projectile", _si("projectile", rest), {"drag": "quadratic"})
+    assert abs(_found(r)["c"] - 0.0012) < 1e-6
+    # The cooling constant from one reading, then the time of a second reading.
+    r = _phys("cooling", preset="coffee")
+    assert [f["id"] for f in r["physics"]["found"]][:1] == ["k"] and "t2" in _found(r)
 
 
-@pytest.mark.parametrize("scenario,values,effects,question,fragment", [
-    ("falling", _vals(g=(9.81, "m/s2"), v0=(0, "m/s"), h0=(50, "m")), {}, "ground", "fill in mass"),
-    ("falling", _vals(m=(1, "kg"), g=(9.81, "m/s2"), v0=(0, "m/s")), {}, "ground", "fill in starting height"),
-    ("falling", _vals(m=(1, "kg"), g=(9.81, "m/s2"), v0=(0, "m/s"), h0=(5, "m")), {"drag": "linear"}, "ground",
-     "fill in linear drag coefficient"),
-    ("falling", _vals(m=(1, "kg"), g=(9.81, "m/s2"), v0=(0, "m/s"), h0=(5, "m")), {"drag": "quadratic"}, "ground",
-     "fill in air density"),
-    ("falling", _vals(m=(-1, "kg"), g=(9.81, "m/s2"), v0=(0, "m/s"), h0=(5, "m")), {}, "ground", "greater than zero"),
-    ("falling", _vals(m=(1, "kg"), g=(9.81, "m/s2")), {}, "terminal", "no terminal velocity"),
-    ("falling", _vals(m=("abc", "kg"), g=(9.81, "m/s2")), {}, "ground", "Mass must be a number"),
-    ("falling", _vals(m=(1, "V"), g=(9.81, "m/s2")), {}, "ground", "cannot be used for a mass"),
-    ("falling", _vals(m=(0.01, "kg"), g=(9.81, "m/s2"), v0=(0, "m/s"), h0=(50, "m"), b=(0.05, "kg/s"),
-                      rho_f=(1.225, "kg/m3"), vol=(0.02, "m3")), {"drag": "linear", "buoyancy": "on"}, "ground",
-     "never reaches the ground"),
-    ("spring", _vals(m=(1, "kg")), {}, "motion", "fill in spring constant"),
-    ("spring", _vals(m=(1, "kg"), k=(4, "N/m"), x0=(0.1, "m"), v0=(0, "m/s")), {"damping": "on"}, "motion",
-     "fill in damping coefficient"),
-    ("rc", _vals(R=(1, "kohm"), V=(5, "V"), vc0=(0, "V")), {}, "motion", "fill in capacitance"),
-    ("rc", _vals(R=(1, "kohm"), C=(1, "uF"), V=(0, "V"), vc0=(0, "V")), {"source": "discharge"}, "motion",
-     "must start with some voltage"),
-    ("rc", _vals(R=(1, "kohm"), C=(1, "uF"), V=(5, "V"), vc0=(0, "V")), {"source": "ac"}, "motion",
-     "fill in source frequency"),
-])
-def test_physics_missing_or_bad_inputs_name_the_field(scenario, values, effects, question, fragment):
-    r = _phys(scenario, values, effects, question)
-    assert not r["ok"] and fragment in r["error"], r.get("error")
-    assert "Traceback" not in r["error"]
+def test_physics_effects_change_the_answer_and_are_compared():
+    plain = _found(_phys("falling", dict(m=(80, "kg"), g=(9.81, "m/s2"), v0=(0, "m/s"), y0=(4000, "m")), {}))
+    r = _phys("falling", preset="skydiver")
+    drag = _found(r)
+    assert drag["tg"] > 2 * plain["tg"] and drag["vi"] < plain["vi"] / 4
+    compare = next(s for s in r["methods"][0]["steps"] if s["title"] == "Compare with the idealised model")
+    assert any("Time to reach the ground" in row[0] for row in compare["table"]["rows"])
+    assert len(r["physics"]["ideal"]) > 50 and r["physics"]["ideal_label"]
+    # A vanishing effect reproduces the ideal answer.
+    ideal = _found(_phys("falling", dict(g=(9.81, "m/s2"), v0=(0, "m/s"), y0=(100, "m")), {}))
+    for values, effects in ((dict(b=(1e-9, "kg/s")), {"drag": "linear"}), (dict(c=(1e-12, "kg/m")), {"drag": "quadratic"})):
+        values.update(m=(80, "kg"), g=(9.81, "m/s2"), v0=(0, "m/s"), y0=(100, "m"))
+        tiny = _found(_phys("falling", values, effects))
+        assert abs(tiny["tg"] - ideal["tg"]) < 1e-6 and abs(tiny["vi"] - ideal["vi"]) < 1e-5, effects
+    # Variables of a switched-off effect do not exist: a value sent for them is ignored.
+    r = _phys("spring", dict(m=(1, "kg"), k=(100, "N/m"), x0=(0.1, "m"), v0=(0, "m/s"), c=(5, "kg/s")), {})
+    assert "zeta" not in _found(r) and all(row[1] != "c" for row in r["methods"][0]["steps"][-2]["table"]["rows"])
 
 
 def test_physics_catalog_and_equation_preview():
     cat = json.loads(physics_catalog())
-    assert [s["id"] for s in cat["scenarios"]] == ["falling", "spring", "rc"]
+    assert [s["id"] for s in cat["scenarios"]] == ["falling", "projectile", "spring", "pendulum", "cooling",
+                                                   "decay", "rc", "rl"]
     assert len(cat["upcoming"]) >= 5
     for sc in cat["scenarios"]:
         ids = {f["id"] for f in sc["fields"]}
-        assert all(f["units"] and f["group"] in ("base", "effect", "param") for f in sc["fields"])
+        groups = {f["group"] for f in sc["fields"]}
+        assert groups <= {"setup", "initial", "effect", "moment", "moment2", "derived"} and "moment" in groups
+        assert all(f["units"] and f["label"] and f["symbol"] for f in sc["fields"])
+        assert "questions" not in sc and len(sc["presets"]) >= 4
+        effect_fields = set()
         for e in sc["effects"]:
             assert e["default"] in [o["id"] for o in e["options"]]
             assert all(fid in ids for o in e["options"] for fid in o["fields"])
-        for q in sc["questions"]:
-            assert set(q["params"]) | set(q["finds"]) | set(q["hides"]) <= ids
-        for p in sc["presets"]:
-            assert set(p["values"]) <= ids
-            for q in sc["questions"]:        # every preset with every question solves or explains why not
-                r = _phys(sc["id"], preset=p["id"], question=q["id"])
-                assert r["ok"] or (r["error"] and "went wrong" not in r["error"]), (sc["id"], p["id"], q["id"], r)
-                if r["ok"]:
-                    assert r["kind"] == "physics" and r["physics"]["curve"] and r["physics"]["animation"]["points"]
-                    assert r["methods"][0]["steps"][0]["title"].startswith("Set up the equation")
-                    assert r["methods"][0]["steps"][-1]["title"] == "Check"
+            effect_fields |= {fid for o in e["options"] for fid in o["fields"]}
+        assert effect_fields == {f["id"] for f in sc["fields"] if f["group"] == "effect"}
     assert json.loads(preview('{"effects": {"drag": "quadratic", "buoyancy": "on"}}', "physics:falling"))["latex"] == \
-        "m\\frac{dv}{dt} = m g - \\rho_f V g - c\\,v\\,|v|"
-    assert "c\\frac{dx}{dt}" in json.loads(preview('{"effects": {"damping": "on"}}', "physics:spring"))["latex"]
+        "m\\,\\frac{dv}{dt} = -m\\,g + \\rho_f V g - c\\,v\\,|v|,\\qquad \\frac{dy}{dt} = v"
+    assert "c\\,x'" in json.loads(preview('{"effects": {"damping": "on"}}', "physics:spring"))["latex"]
     assert "R_L" in json.loads(preview('{"effects": {"leak": "on"}}', "physics:rc"))["latex"]
-    assert "Unknown physics scenario" in json.loads(physics("warp", ""))["error"]
-    assert "could not be read" in json.loads(physics("rc", "{oops"))["error"]
+    assert "\\sin\\theta" in json.loads(preview('{"effects": {"large": "on"}}', "physics:pendulum"))["latex"]
+
+
+def test_physics_solves_quickly():
+    import time
+    for model, preset_id in (("projectile", "golf"), ("projectile", "javelin"), ("falling", "skydiver"),
+                             ("pendulum", "swing"), ("projectile", "hoop")):
+        start = time.time()
+        assert _phys(model, preset=preset_id)["ok"]
+        assert time.time() - start < 2.0, (model, preset_id)
 
 
 def test_export_fixtures():
@@ -3154,9 +3169,15 @@ def test_export_fixtures():
             fh.write(tool(*args))
     with open(os.path.join(out, "physics_catalog.json"), "w") as fh:
         fh.write(physics_catalog())
-    with open(os.path.join(out, "physics_falling.json"), "w") as fh:
-        fh.write(physics("falling", json.dumps({"preset": "skydiver", "question": "ground"})))
-    with open(os.path.join(out, "physics_spring.json"), "w") as fh:
-        fh.write(physics("spring", json.dumps({"preset": "car", "question": "motion"})))
-    with open(os.path.join(out, "physics_rc.json"), "w") as fh:
-        fh.write(physics("rc", json.dumps({"preset": "flash", "question": "fraction"})))
+    for name, model, preset_id in (
+            ("physics_falling.json", "falling", "skydiver"), ("physics_spring.json", "spring", "car"),
+            ("physics_rc.json", "rc", "flash"), ("physics_projectile.json", "projectile", "hoop"),
+            ("physics_cooling.json", "cooling", "coffee"), ("physics_decay.json", "decay", "carbon"),
+            ("physics_rl.json", "rl", "relay"), ("physics_pendulum.json", "pendulum", "swing")):
+        with open(os.path.join(out, name), "w") as fh:
+            fh.write(physics(model, json.dumps({"preset": preset_id})))
+    with open(os.path.join(out, "physics_missing.json"), "w") as fh:
+        fh.write(physics("spring", json.dumps({"values": {
+            "m": {"value": "2", "unit": "kg"}, "x0": {"value": "0.1", "unit": "m"},
+            "v0": {"value": "0", "unit": "m/s"}, "T": {"value": "1.5", "unit": "s"},
+            "t": {"value": "1", "unit": "s"}}, "effects": {"damping": "on"}})))

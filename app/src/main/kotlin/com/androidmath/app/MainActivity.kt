@@ -50,8 +50,8 @@ class MainActivity : ComponentActivity() {
      * Math tools (modes linalg, calculus, series, complex, special, ftransform,
      * recurrence): "op" is the
      * operation, equation the matrix or expression, x0 and y0 the small boxes.
-     * Physics (mode physics): equation is the scenario id (falling, spring, rc),
-     * "preset" a preset id, "op" the question id, "inputs" the whole form as JSON.
+     * Physics (mode physics): equation is the model id (falling, spring, rc, ...),
+     * "preset" a real example's id, "inputs" the whole form as JSON.
      */
     private fun openFromIntent(intent: Intent?) {
         val source = intent ?: return

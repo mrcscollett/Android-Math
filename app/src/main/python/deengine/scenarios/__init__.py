@@ -1,24 +1,27 @@
-"""Physics scenarios: real situations modelled by differential equations.
+"""Physics models: real situations governed by differential equations.
 
-Each scenario module declares its fields, optional effects, questions and
-presets in a SCENARIO dict, and provides equation(effects) and solve(inputs).
+Each model module declares its variables, optional effects and presets in a
+MODEL dict and provides relations(effects), derivation(effects),
+equation(effects), horizon(effects, v), trajectory(effects, v) and
+graph(effects, v). The user fills in the variables they know; solver.py
+finds the rest from the relations.
 """
 import json
 
 from ..parsing import InputError
-from . import falling, rc, spring
+from . import cooling, decay, falling, pendulum, projectile, rc, rl, solver, spring
 from .common import Inputs
 
-SCENARIOS = [falling, spring, rc]
-UPCOMING = ["Projectile", "Pendulum", "Rocket", "Cooling and heating", "RL and RLC circuits",
-            "Charged particle in a field", "Electromagnetic induction", "Radioactive decay"]
+MODELS = [falling, projectile, spring, pendulum, cooling, decay, rc, rl]
+UPCOMING = ["Rocket", "Inclines and braking", "Rotation", "Orbits", "Draining tank",
+            "RLC circuit", "Charged particle in a field", "Electromagnetic induction"]
 
 
-def _module(scenario_id):
-    for mod in SCENARIOS:
-        if mod.SCENARIO["id"] == scenario_id:
+def _module(model_id):
+    for mod in MODELS:
+        if mod.MODEL["id"] == model_id:
             return mod
-    raise InputError("Unknown physics scenario: %s." % scenario_id)
+    raise InputError("Unknown physics model: %s." % model_id)
 
 
 def _raw(inputs_text):
@@ -27,25 +30,25 @@ def _raw(inputs_text):
     try:
         raw = json.loads(inputs_text)
     except ValueError:
-        raise InputError("The scenario inputs could not be read.")
+        raise InputError("The inputs could not be read.")
     if not isinstance(raw, dict):
-        raise InputError("The scenario inputs could not be read.")
+        raise InputError("The inputs could not be read.")
     return raw
 
 
 def catalog():
-    return {"ok": True, "scenarios": [m.SCENARIO for m in SCENARIOS], "upcoming": UPCOMING}
+    return {"ok": True, "scenarios": [m.MODEL for m in MODELS], "upcoming": UPCOMING}
 
 
-def solve(scenario_id, inputs_text):
-    mod = _module(scenario_id)
-    return mod.solve(Inputs(mod.SCENARIO, _raw(inputs_text)))
+def solve(model_id, inputs_text):
+    mod = _module(model_id)
+    return solver.solve(mod, Inputs(mod.MODEL, _raw(inputs_text)))
 
 
-def equation(scenario_id, inputs_text):
+def equation(model_id, inputs_text):
     """LaTeX of the governing equation for the switches chosen so far."""
-    mod = _module(scenario_id)
+    mod = _module(model_id)
     raw = _raw(inputs_text)
-    effects = {e["id"]: e["default"] for e in mod.SCENARIO["effects"]}
+    effects = {e["id"]: e["default"] for e in mod.MODEL["effects"]}
     effects.update({k: v for k, v in (raw.get("effects") or {}).items() if k in effects})
     return mod.equation(effects)

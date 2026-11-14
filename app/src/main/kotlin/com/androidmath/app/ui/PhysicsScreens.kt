@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -78,9 +79,12 @@ import com.androidmath.core.Viewport
 import kotlinx.coroutines.delay
 
 /**
- * The form for a physics scenario. Everything on it comes from the engine's
- * catalog: presets, optional effects, the boxes each effect needs, the unit
- * choices and the questions. A box left empty means "unknown".
+ * The form for a physics model: a list of its variables, each with a value box
+ * and a unit picker. The user fills in what they know; every box left empty is
+ * an unknown, and Solve works out each one the known values determine.
+ * Everything shown comes from the engine's catalog: the variables and their
+ * sections, the optional effects (each adds its own variables), the unit
+ * choices and the real examples.
  */
 @Composable
 fun PhysicsInputScreen(model: SolverViewModel) {
@@ -118,7 +122,14 @@ fun PhysicsInputScreen(model: SolverViewModel) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
 
-                    SectionLabel("Start from a real example")
+                    Text(
+                        "Fill in the values you know and leave the rest empty. " +
+                            "Solve finds every empty one that your values determine.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+
+                    SectionLabel("Fill in a real example")
                     FlowRow(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -126,6 +137,7 @@ fun PhysicsInputScreen(model: SolverViewModel) {
                         for (preset in scenario.presets) {
                             AssistChip(onClick = { model.applyPreset(preset) }, label = { Text(preset.label) })
                         }
+                        AssistChip(onClick = { model.clearPhysics() }, label = { Text("Clear all") })
                     }
 
                     SectionLabel("The equation (" + scenario.law + ")")
@@ -148,40 +160,19 @@ fun PhysicsInputScreen(model: SolverViewModel) {
                         }
                     }
 
-                    SectionLabel("What to find")
-                    FlowRow(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        for (question in scenario.questions) {
-                            FilterChip(
-                                selected = question.id == model.physicsQuestion,
-                                onClick = { model.choosePhysicsQuestion(question.id) },
-                                label = { Text(question.label) },
+                    val effects = HashMap<String, String>(model.physicsEffects)
+                    for (section in scenario.sections(effects)) {
+                        SectionLabel(section.title)
+                        for (field in section.fields) {
+                            FieldRow(
+                                field = field,
+                                value = model.physicsValues[field.id] ?: "",
+                                unit = model.physicsUnits[field.id] ?: field.initialUnit,
+                                onValue = { model.setPhysicsValue(field.id, it) },
+                                onUnit = { model.setPhysicsUnit(field.id, it) },
                             )
                         }
                     }
-
-                    SectionLabel("What you know")
-                    val effects = HashMap<String, String>(model.physicsEffects)
-                    val finds = scenario.question(model.physicsQuestion)?.finds ?: emptyList()
-                    for (field in scenario.visibleFields(effects, model.physicsQuestion)) {
-                        FieldRow(
-                            field = field,
-                            value = model.physicsValues[field.id] ?: "",
-                            unit = model.physicsUnits[field.id] ?: field.initialUnit,
-                            toFind = field.id in finds,
-                            onValue = { model.setPhysicsValue(field.id, it) },
-                            onUnit = { model.setPhysicsUnit(field.id, it) },
-                        )
-                    }
-                    Text(
-                        "Leave a box empty if you do not know that value. If the question cannot " +
-                            "be answered without it, the solver says which one is missing.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 8.dp),
-                    )
 
                     model.inputError?.let {
                         Text(
@@ -259,20 +250,20 @@ private fun EffectRow(effect: PhysicsEffect, chosen: String, onChoose: (String) 
     }
 }
 
-/** A quantity: its value box and, beside it, the unit picker. */
+/** One variable: its value box (empty = unknown), a clear button and the unit picker. */
 @Composable
 private fun FieldRow(
-    field: PhysicsField, value: String, unit: String, toFind: Boolean,
+    field: PhysicsField, value: String, unit: String,
     onValue: (String) -> Unit, onUnit: (String) -> Unit,
 ) {
     Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
-                value = if (toFind) "" else value,
+                value = value,
                 onValueChange = onValue,
                 modifier = Modifier.weight(1f),
-                enabled = !toFind,
-                label = { Text(if (toFind) field.label + " (to find)" else field.label) },
+                label = { Text(field.label) },
+                placeholder = { Text("unknown") },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(
                     capitalization = KeyboardCapitalization.None,
@@ -281,6 +272,9 @@ private fun FieldRow(
                     imeAction = ImeAction.Next,
                 ),
             )
+            if (value.isNotEmpty()) {
+                TextButton(onClick = { onValue("") }) { Text("Clear") }
+            }
             if (field.units.size > 1) {
                 UnitPicker(field, unit, onUnit)
             } else {
@@ -290,7 +284,7 @@ private fun FieldRow(
                 }
             }
         }
-        if (field.hint.isNotEmpty() && !toFind) {
+        if (field.hint.isNotEmpty()) {
             Text(
                 field.hint,
                 style = MaterialTheme.typography.bodySmall,
@@ -323,18 +317,55 @@ private fun UnitPicker(field: PhysicsField, unit: String, onUnit: (String) -> Un
     }
 }
 
-/** The answer in words and units, shown above the method chips on the result screen. */
+/**
+ * What was found, shown above the tabs on the result screen: each unknown that
+ * was worked out with its value and unit, then each one that could not be
+ * found with what else is needed.
+ */
 @Composable
 fun PhysicsHeadline(data: PhysicsData) {
     Card(
         modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 4.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
     ) {
-        Text(
-            data.headline.text,
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.padding(12.dp),
-        )
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 220.dp)
+                .verticalScroll(rememberScrollState())
+                .padding(12.dp),
+        ) {
+            if (data.found.isEmpty() && data.missing.isEmpty()) {
+                Text(data.headline.text, style = MaterialTheme.typography.titleMedium)
+            }
+            if (data.found.isNotEmpty()) {
+                Text("Found", style = MaterialTheme.typography.labelLarge)
+                for (item in data.found) {
+                    Row(Modifier.fillMaxWidth().padding(top = 2.dp)) {
+                        Text(
+                            item.label,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.weight(1f).padding(end = 8.dp),
+                        )
+                        Text(item.text, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                    }
+                }
+            }
+            if (data.missing.isNotEmpty()) {
+                Text(
+                    "Cannot be found yet",
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.padding(top = if (data.found.isEmpty()) 0.dp else 8.dp),
+                )
+                for (item in data.missing) {
+                    Text(
+                        item.label + ": " + item.reason,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -346,6 +377,18 @@ fun PhysicsHeadline(data: PhysicsData) {
 @Composable
 fun PhysicsTab(model: SolverViewModel) {
     val data = model.result?.physics ?: return
+    if (data.curve.isEmpty()) {
+        // The motion itself is not pinned down by the values entered, so there is nothing to draw.
+        Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+            Text(
+                "There is no graph yet: the values entered do not fix the whole motion. " +
+                    "Enter the values listed under \"Cannot be found yet\" to see it.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        return
+    }
     val fraction = model.pdeTime.coerceIn(0f, 1f)
     val time = fraction * data.tMax
 
@@ -404,7 +447,7 @@ fun PhysicsTab(model: SolverViewModel) {
             }
             Text(
                 data.yLabel + " against " + data.xLabel +
-                    (if (data.marker != null) ". The dot marks the answer." else "."),
+                    (data.marker?.let { ". The dot marks: " + it.label + "." } ?: "."),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

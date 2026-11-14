@@ -148,7 +148,6 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
     val physicsValues = mutableStateMapOf<String, String>()
     val physicsUnits = mutableStateMapOf<String, String>()
     val physicsEffects = mutableStateMapOf<String, String>()
-    var physicsQuestion by mutableStateOf("")
         private set
     /** A physics problem asked for before the catalog had loaded (a launch intent). */
     private var pendingPhysics: Triple<String, Map<String, String>, Int>? = null
@@ -166,13 +165,12 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Opens a physics scenario with its first preset filled in. */
+    /** Opens a physics model with every box empty, ready for the known values. */
     fun openScenario(id: String) {
         val scenario = physicsCatalog?.scenario(id) ?: return
         open(Mode.Physics)
         physicsScenario = scenario
         resetPhysics(scenario)
-        scenario.presets.firstOrNull()?.let { applyPreset(it) }
         screen = Screen.Input
         refreshPreview()
     }
@@ -186,11 +184,21 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
             physicsUnits[f.id] = f.initialUnit
         }
         physicsEffects.putAll(scenario.defaultEffects())
-        physicsQuestion = scenario.questions.firstOrNull()?.id ?: ""
         inputError = null
     }
 
-    /** Fills the form with a preset's realistic values, effects and question. */
+    /** Empties every box and switches every effect back to its default. */
+    fun clearPhysics() {
+        val scenario = physicsScenario ?: return
+        resetPhysics(scenario)
+        refreshPreview()
+    }
+
+    /**
+     * Fills the form with a real example: its known values and effects. Every
+     * other box is left empty; an entry with an empty value only sets the unit
+     * the answer for that box is shown in.
+     */
     fun applyPreset(preset: PhysicsPreset) {
         val scenario = physicsScenario ?: return
         resetPhysics(scenario)
@@ -199,7 +207,6 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
             entry.getOrNull(1)?.let { physicsUnits[id] = it }
         }
         physicsEffects.putAll(preset.effects)
-        preset.question?.let { physicsQuestion = it }
         refreshPreview()
     }
 
@@ -219,22 +226,15 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
         refreshPreview()
     }
 
-    fun choosePhysicsQuestion(id: String) {
-        physicsQuestion = id
-        inputError = null
-    }
-
-    /** What the physics form currently holds: the visible boxes, with "to find" ones left blank. */
+    /** What the physics form holds: every variable that exists for the chosen effects; blank means unknown. */
     fun physicsInputs(): PhysicsInputs {
-        val scenario = physicsScenario ?: return PhysicsInputs(emptyMap(), emptyMap(), "")
+        val scenario = physicsScenario ?: return PhysicsInputs(emptyMap(), emptyMap())
         val effects = LinkedHashMap<String, String>(physicsEffects)
-        val finds = scenario.question(physicsQuestion)?.finds ?: emptyList()
         val values = LinkedHashMap<String, Pair<String, String>>()
-        for (f in scenario.visibleFields(effects, physicsQuestion)) {
-            val text = if (f.id in finds) "" else (physicsValues[f.id] ?: "")
-            values[f.id] = text to (physicsUnits[f.id] ?: f.initialUnit)
+        for (f in scenario.visibleFields(effects)) {
+            values[f.id] = (physicsValues[f.id] ?: "").trim() to (physicsUnits[f.id] ?: f.initialUnit)
         }
-        return PhysicsInputs(values, effects, physicsQuestion)
+        return PhysicsInputs(values, effects)
     }
 
     val selectedMethod: Method?
@@ -644,9 +644,8 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Reopens a physics scenario. Fields: "equation" is the scenario id, "inputs"
-     * the saved form (optional), "preset" a preset to start from instead, and
-     * "op" the question to ask.
+     * Reopens a physics model. Fields: "equation" is the model id, "inputs"
+     * the saved form (optional) and "preset" a real example to start from instead.
      */
     private fun restorePhysics(fields: Map<String, String>, openTab: Int) {
         val catalog = physicsCatalog
@@ -666,9 +665,7 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
                 if (entry.second.isNotEmpty()) physicsUnits[id] = entry.second
             }
             physicsEffects.putAll(saved.effects)
-            if (scenario.question(saved.question) != null) physicsQuestion = saved.question
         }
-        fields["op"]?.let { if (scenario.question(it) != null) physicsQuestion = it }
         refreshPreview()
         solve(openTab)
     }
