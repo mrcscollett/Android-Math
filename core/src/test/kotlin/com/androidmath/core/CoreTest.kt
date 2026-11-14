@@ -639,55 +639,134 @@ class PhysicsTest {
     @Test fun catalogDrivesTheForm() {
         val catalog = EngineJson.catalog(fixture("physics_catalog.json"))
         assertTrue(catalog.ok)
-        assertEquals(
-            listOf("falling", "projectile", "spring", "pendulum", "cooling", "decay", "rc", "rl"),
-            catalog.scenarios.map { it.id },
-        )
+        // General systems, not situations.
+        assertEquals(listOf("line", "plane", "rotation", "change", "circuit"), catalog.scenarios.map { it.id })
         assertTrue(catalog.upcoming.isNotEmpty())
-        val falling = catalog.scenario("falling")!!
-        assertEquals(mapOf("drag" to "none", "buoyancy" to "off", "gravity" to "off"), falling.defaultEffects())
-
-        // Every variable that is not part of an effect, then each effect's variables as it is switched on.
-        val plain = listOf("m", "g", "y0", "v0", "t", "y", "v", "tg", "vi", "ymax")
-        assertEquals(plain, falling.visibleFields(falling.defaultEffects()).map { it.id })
-        val quadratic = falling.defaultEffects() + ("drag" to "quadratic") + ("buoyancy" to "on")
+        val line = catalog.scenario("line")!!
         assertEquals(
-            listOf("m", "g", "y0", "v0", "c", "rho", "cd", "area", "vt", "rhof", "vol", "t", "y", "v", "tg", "vi", "ymax"),
-            falling.visibleFields(quadratic).map { it.id },
+            mapOf(
+                "gravity" to "none", "force" to "off", "friction" to "off", "drag" to "none",
+                "spring" to "off", "buoyancy" to "off", "driving" to "off", "varying" to "off",
+            ),
+            line.defaultEffects(),
         )
-        val sections = falling.sections(quadratic)
-        assertEquals(listOf("setup", "initial", "effect", "moment", "derived"), sections.map { it.group })
-        assertEquals(listOf("t", "y", "v"), sections.first { it.group == "moment" }.fields.map { it.id })
-        assertEquals(falling.visibleFields(quadratic).size, sections.sumOf { it.fields.size })
-        assertTrue(sections.all { it.title.isNotBlank() })
-        assertEquals(listOf("setup", "initial", "moment", "derived"), falling.sections(emptyMap()).map { it.group })
 
-        // Every box starts blank: a blank box is an unknown.
-        val mass = falling.field("m")!!
+        // With nothing switched on it is plain kinematics: a constant acceleration and no force rows.
+        val plain = listOf(
+            "m", "acc", "x0", "v0", "t", "x", "v", "ek", "em", "tg", "vi", "tstop", "xstop", "dstop", "E",
+        )
+        assertEquals(plain, line.visibleFields(line.defaultEffects()).map { it.id })
+        assertEquals(plain, line.visibleFields(emptyMap()).map { it.id })
+        // Each switch brings its own rows, and rows can depend on several switches at once:
+        // the constant acceleration goes and the acceleration at a moment appears once drag is on.
+        val quadratic = line.defaultEffects() + ("gravity" to "vertical") + ("drag" to "quadratic") + ("buoyancy" to "on")
+        assertEquals(
+            listOf(
+                "m", "g", "c", "rho", "cd", "area", "vt", "rhof", "vol", "x0", "v0", "t", "x", "v", "a", "ek",
+                "tg", "vi", "tstop", "xstop", "dstop",
+            ),
+            line.visibleFields(quadratic).map { it.id },
+        )
+        val springy = line.visibleFields(line.defaultEffects() + ("spring" to "on") + ("drag" to "linear")).map { it.id }
+        assertTrue(springy.containsAll(listOf("k", "b", "w0", "T", "zeta", "tau", "elost")))
+        assertFalse("acc" in springy || "tg" in springy || "c" in springy)
+        assertFalse("zeta" in line.visibleFields(line.defaultEffects() + ("spring" to "on")).map { it.id })
+
+        val sections = line.sections(quadratic)
+        assertEquals(listOf("setup", "initial", "effect", "moment", "derived"), sections.map { it.group })
+        assertEquals(listOf("t", "x", "v", "a", "ek"), sections.first { it.group == "moment" }.fields.map { it.id })
+        assertEquals(line.visibleFields(quadratic).size, sections.sumOf { it.fields.size })
+        assertTrue(sections.all { it.title.isNotBlank() })
+        assertEquals(listOf("setup", "initial", "moment", "derived"), line.sections(emptyMap()).map { it.group })
+
+        // The circuit's rows follow the components switched on.
+        val circuit = catalog.scenario("circuit")!!
+        val rc = circuit.visibleFields(circuit.defaultEffects() + ("res" to "on") + ("cap" to "on")).map { it.id }
+        assertEquals(listOf("R", "C", "vc0", "t", "vc", "q", "i", "ec", "tau"), rc)
+        val rlc = circuit.visibleFields(circuit.defaultEffects() + ("res" to "on") + ("cap" to "on") + ("ind" to "on"))
+        assertTrue(rlc.map { it.id }.containsAll(listOf("R", "L", "C", "vc0", "i0", "w0", "zeta", "qfac")))
+
+        // Every box starts blank in every system: a blank box is an unknown, and no situation is built in.
+        for (sc in catalog.scenarios) {
+            assertTrue(sc.id, sc.fields.all { it.initialValue.isEmpty() })
+        }
+        val mass = line.field("m")!!
         assertEquals("", mass.initialValue)
         assertEquals("kg", mass.initialUnit)
         assertEquals("lb", mass.unitLabel("lb"))
-        val skydiver = falling.presets.first { it.id == "skydiver" }
+        // Examples are optional: each is only a set of switches and known values.
+        val skydiver = line.presets.first { it.id == "skydiver" }
         assertEquals("quadratic", skydiver.effects["drag"])
+        assertEquals("vertical", skydiver.effects["gravity"])
         assertEquals(listOf("80", "kg"), skydiver.values["m"])
         for (sc in catalog.scenarios) {
             val ids = sc.fields.map { it.id }.toSet()
-            assertTrue(sc.id, sc.presets.isNotEmpty() && sc.fields.all { it.units.isNotEmpty() })
+            val options = sc.effects.associate { e -> e.id to e.options.map { it.id } }
+            assertTrue(sc.id, sc.presets.size >= 8 && sc.fields.all { it.units.isNotEmpty() })
             assertTrue(sc.id, sc.presets.all { p -> p.values.keys.all { it in ids } && p.values.values.all { it.size == 2 } })
+            assertTrue(sc.id, sc.presets.all { p -> p.effects.all { (k, v) -> v in (options[k] ?: emptyList()) } })
             assertTrue(sc.id, sc.effects.all { e -> e.options.all { o -> o.fields.all { it in ids } } })
             assertTrue(sc.id, sc.fields.all { f -> Scenario.GROUPS.any { it.first == f.group } })
+            assertTrue(sc.id, sc.fields.all { f -> (f.show + f.hide).all { c -> c.options.all { it in (options[c.effect] ?: emptyList()) } } })
         }
         assertFalse(EngineJson.catalog("not json").ok)
     }
 
+    @Test fun rowConditionsOnTheSwitches() {
+        val both = FieldCondition("drag", listOf("none", "linear"))
+        assertTrue(both.holds(mapOf("drag" to "linear")))
+        assertFalse(both.holds(mapOf("drag" to "quadratic")))
+        assertFalse(both.holds(emptyMap()))
+        val unit = listOf(UnitChoice("m", "m"))
+        val sc = Scenario(
+            id = "demo", title = "Demo",
+            fields = listOf(
+                PhysicsField("always", "Always", units = unit),
+                PhysicsField("needsBoth", "Needs both", units = unit, show = listOf(FieldCondition("a", listOf("on")), FieldCondition("b", listOf("on")))),
+                PhysicsField("unlessBoth", "Unless both", units = unit, hide = listOf(FieldCondition("a", listOf("on")), FieldCondition("b", listOf("on")))),
+                PhysicsField("ofA", "Of a", units = unit, group = "effect"),
+            ),
+            effects = listOf(
+                PhysicsEffect("a", "A", options = listOf(EffectOption("off"), EffectOption("on", fields = listOf("ofA")))),
+                PhysicsEffect("b", "B", options = listOf(EffectOption("off"), EffectOption("on"))),
+            ),
+        )
+        assertEquals(listOf("always", "unlessBoth"), sc.visibleFields(emptyMap()).map { it.id })
+        assertEquals(listOf("always", "unlessBoth", "ofA"), sc.visibleFields(mapOf("a" to "on")).map { it.id })
+        assertEquals(listOf("always", "needsBoth", "ofA"), sc.visibleFields(mapOf("a" to "on", "b" to "on")).map { it.id })
+    }
+
+    @Test fun oldModelIdsOpenTheSystemThatReplacedThem() {
+        val catalog = EngineJson.catalog(fixture("physics_catalog.json"))
+        val expected = mapOf(
+            "falling" to "line", "spring" to "line", "projectile" to "plane", "pendulum" to "rotation",
+            "cooling" to "change", "decay" to "change", "rc" to "circuit", "rl" to "circuit",
+        )
+        for ((old, new) in expected) {
+            val sc = catalog.scenario(old)
+            assertEquals(old, new, sc?.id)
+            // The switches that make the general system behave like the old model all exist.
+            val legacy = catalog.legacyEffects(old)
+            assertTrue(old, legacy.isNotEmpty())
+            for ((effect, option) in legacy) {
+                assertTrue("$old $effect", sc!!.effects.first { it.id == effect }.options.any { it.id == option })
+            }
+        }
+        assertEquals("line", catalog.scenario("line")?.id)
+        assertTrue(catalog.legacyEffects("line").isEmpty())
+        assertNull(catalog.scenario("warp"))
+        assertTrue(catalog.legacyEffects("warp").isEmpty())
+    }
+
     @Test fun resultsCarryFoundValuesCurvesAndAnimation() {
-        val names = listOf("falling", "projectile", "spring", "pendulum", "cooling", "decay", "rc", "rl")
+        val names = listOf("line", "plane", "rotation", "change", "circuit", "kinematics", "orbit", "rlc")
+        val systems = setOf("line", "plane", "rotation", "change", "circuit")
         for (name in names) {
             val r = EngineJson.solveResult(fixture("physics_$name.json"))
             assertTrue(name, r.ok)
             assertEquals("physics", r.kind)
             val p = r.physics!!
-            assertEquals(name, p.scenario)
+            assertTrue(name, p.scenario in systems)
             assertTrue(name, p.found.isNotEmpty() && p.missing.isEmpty())
             assertTrue(name, p.found.all { it.id.isNotBlank() && it.label.isNotBlank() && it.text.isNotBlank() && it.value.isFinite() })
             assertTrue(p.headline.text.isNotBlank())
@@ -702,15 +781,23 @@ class PhysicsTest {
             assertEquals(anim.points.last()[1], anim.valueAt(p.tMax * 2), 0.0)
             assertTrue(r.applicableMethods.isNotEmpty())
         }
-        val fall = EngineJson.solveResult(fixture("physics_falling.json")).physics!!
-        assertEquals(listOf("c", "vt", "tg", "vi", "ymax"), fall.found.map { it.id })
+        val fall = EngineJson.solveResult(fixture("physics_line.json")).physics!!
+        assertEquals("line", fall.scenario)
+        assertEquals(listOf("c", "vt", "tg", "vi", "E"), fall.found.map { it.id })
         assertEquals(50.62, fall.found.first { it.id == "vt" }.value, 0.01)
+        assertEquals(82.59, fall.found.first { it.id == "tg" }.value, 0.01)
         assertEquals("fall", fall.animation!!.kind)
         assertEquals(4000.0, fall.animation!!.valueAt(0.0), 1e-9)      // starts at the jump height
         assertEquals(0.0, fall.animation!!.valueAt(fall.tMax), 1e-6)   // and ends on the ground
         assertTrue(fall.marker!!.t <= fall.tMax && fall.marker!!.t > 0.9 * fall.tMax)   // the landing is marked
         assertEquals(fall.found.first { it.id == "tg" }.value, fall.marker!!.t, 1e-9)
         assertTrue(fall.ideal.isNotEmpty())                             // drag is on, so the ideal curve is given
+        val kin = EngineJson.solveResult(fixture("physics_kinematics.json")).physics!!
+        assertEquals(4.5, kin.found.first { it.id == "acc" }.value, 1e-9)
+        assertEquals(81.0, kin.found.first { it.id == "x" }.value, 1e-9)
+        assertTrue(kin.ideal.isEmpty())                                 // nothing to switch off
+        val flash = EngineJson.solveResult(fixture("physics_circuit.json")).physics!!
+        assertEquals(0.719, flash.found.first { it.id == "t" }.value, 0.0005)
     }
 
     @Test fun unknownsThatCannotBeFoundSayWhatIsNeeded() {
@@ -718,7 +805,7 @@ class PhysicsTest {
         assertTrue(r.ok)
         val p = r.physics!!
         assertTrue(p.found.any { it.id == "k" })
-        assertEquals(listOf("c", "zeta", "tau", "x", "v"), p.missing.map { it.id })
+        assertEquals(listOf("b", "x", "v", "a", "zeta", "tau"), p.missing.map { it.id })
         assertTrue(p.missing.all { it.label.isNotBlank() && it.reason.startsWith("also enter") })
         // Nothing to draw without the full motion, and that must not break the result.
         assertTrue(p.curve.isEmpty())
@@ -740,10 +827,10 @@ class PhysicsTest {
     @Test fun inputsRoundTripAndLabel() {
         val inputs = PhysicsInputs(
             linkedMapOf(
-                "m" to ("80" to "kg"), "g" to ("9.81" to "m/s2"), "b" to ("" to "kg/s"), "y0" to ("1.5" to "km"),
+                "m" to ("80" to "kg"), "g" to ("9.81" to "m/s2"), "b" to ("" to "kg/s"), "x0" to ("1.5" to "km"),
                 "c" to ("0.3" to "kg/m"), "tg" to ("" to "min"),
             ),
-            mapOf("drag" to "linear"),
+            mapOf("gravity" to "vertical", "drag" to "linear"),
         )
         val text = inputs.encode()
         assertEquals(inputs, PhysicsInputs.decode(text))
@@ -751,10 +838,13 @@ class PhysicsTest {
         // History entries written before the redesign carried a question; it is ignored.
         val old = PhysicsInputs.decode("{\"values\":{\"m\":{\"value\":\"2\",\"unit\":\"kg\"}},\"effects\":{},\"question\":\"ground\"}")
         assertEquals(PhysicsInputs(mapOf("m" to ("2" to "kg")), emptyMap()), old)
-        val falling = EngineJson.catalog(fixture("physics_catalog.json")).scenario("falling")!!
+        val line = EngineJson.catalog(fixture("physics_catalog.json")).scenario("line")!!
         // Blank boxes are unknowns, and c does not exist while drag is linear.
-        assertEquals(listOf("m", "g", "y0"), inputs.knowns(falling).map { it.id })
-        assertEquals("Known: Mass 80 kg, Gravity 9.81 m/s\u00b2, Starting height 1.5 km", inputs.label(falling))
-        assertEquals("No values entered", PhysicsInputs(emptyMap(), emptyMap()).label(falling))
+        assertEquals(listOf("m", "g", "x0"), inputs.knowns(line).map { it.id })
+        assertEquals("Known: Mass 80 kg, Gravity 9.81 m/s\u00b2, Initial position 1.5 km", inputs.label(line))
+        assertEquals("No values entered", PhysicsInputs(emptyMap(), emptyMap()).label(line))
+        // A form saved for an earlier model has ids the new system does not know: they are simply not there.
+        val stale = PhysicsInputs(mapOf("y0" to ("4000" to "m"), "m" to ("80" to "kg")), mapOf("drag" to "quadratic"))
+        assertEquals(listOf("m"), stale.knowns(line).map { it.id })
     }
 }

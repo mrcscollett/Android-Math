@@ -23,7 +23,7 @@ _U = {
                     ("/h", "per h", "h^{-1}", 1 / 3600, 0), ("/d", "per day", "d^{-1}", 1 / 86400, 0)],
     "mass": [("kg", "kg", "kg", 1, 0), ("g", "g", "g", 1e-3, 0), ("mg", "mg", "mg", 1e-6, 0),
              ("lb", "lb", "lb", 0.45359237, 0)],
-    "speed": [("m/s", "m/s", "m/s", 1, 0), ("mm/s", "mm/s", "mm/s", 1e-3, 0), ("cm/s", "cm/s", "cm/s", 0.01, 0), ("km/h", "km/h", "km/h", 1 / 3.6, 0),
+    "speed": [("m/s", "m/s", "m/s", 1, 0), ("mm/s", "mm/s", "mm/s", 1e-3, 0), ("cm/s", "cm/s", "cm/s", 0.01, 0), ("km/h", "km/h", "km/h", 1 / 3.6, 0), ("km/s", "km/s", "km/s", 1e3, 0),
               ("mph", "mph", "mph", 0.44704, 0), ("ft/s", "ft/s", "ft/s", 0.3048, 0)],
     "acceleration": [("m/s2", "m/s\u00b2", "m/s^2", 1, 0), ("ft/s2", "ft/s\u00b2", "ft/s^2", 0.3048, 0),
                      ("g0", "g", "g_0", 9.80665, 0)],
@@ -44,7 +44,7 @@ _U = {
     "capacitance": [("F", "F", "F", 1, 0), ("mF", "mF", "mF", 1e-3, 0), ("uF", "\u00b5F", "\\mu F", 1e-6, 0),
                     ("nF", "nF", "nF", 1e-9, 0), ("pF", "pF", "pF", 1e-12, 0)],
     "inductance": [("H", "H", "H", 1, 0), ("mH", "mH", "mH", 1e-3, 0), ("uH", "\u00b5H", "\\mu H", 1e-6, 0)],
-    "charge": [("C", "C", "C", 1, 0), ("mC", "mC", "mC", 1e-3, 0), ("uC", "\u00b5C", "\\mu C", 1e-6, 0),
+    "charge": [("C", "C", "C", 1, 0), ("e", "e", "e", 1.602176634e-19, 0), ("mC", "mC", "mC", 1e-3, 0), ("uC", "\u00b5C", "\\mu C", 1e-6, 0),
                ("nC", "nC", "nC", 1e-9, 0)],
     "area": [("m2", "m\u00b2", "m^2", 1, 0), ("cm2", "cm\u00b2", "cm^2", 1e-4, 0),
              ("mm2", "mm\u00b2", "mm^2", 1e-6, 0), ("ft2", "ft\u00b2", "ft^2", 0.09290304, 0)],
@@ -56,6 +56,27 @@ _U = {
                         ("N/cm", "N/cm", "N/cm", 100, 0), ("lbf/in", "lbf/in", "lbf/in", 175.12684, 0)],
     "damping": [("kg/s", "N\u00b7s/m", "N\\,s/m", 1, 0), ("kN.s/m", "kN\u00b7s/m", "kN\\,s/m", 1e3, 0)],
     "dimensionless": [("", "", "", 1, 0), ("%", "%", "\\%", 0.01, 0)],
+    "electric_field": [("V/m", "V/m", "V/m", 1, 0), ("kV/m", "kV/m", "kV/m", 1e3, 0), ("N/C", "N/C", "N/C", 1, 0)],
+    "magnetic_field": [("T", "T", "T", 1, 0), ("mT", "mT", "mT", 1e-3, 0), ("uT", "\u00b5T", "\\mu T", 1e-6, 0),
+                       ("G", "gauss", "G", 1e-4, 0)],
+    "grav_parameter": [("m3/s2", "m\u00b3/s\u00b2", "m^3/s^2", 1, 0), ("km3/s2", "km\u00b3/s\u00b2", "km^3/s^2", 1e9, 0)],
+    "moment_of_inertia": [("kg.m2", "kg\u00b7m\u00b2", "kg\\,m^2", 1, 0), ("g.cm2", "g\u00b7cm\u00b2", "g\\,cm^2", 1e-7, 0)],
+    "torque": [("N.m", "N\u00b7m", "N\\,m", 1, 0), ("mN.m", "mN\u00b7m", "mN\\,m", 1e-3, 0),
+               ("lbf.ft", "lbf\u00b7ft", "lbf\\,ft", 1.3558179, 0)],
+    "torsion_constant": [("N.m/rad", "N\u00b7m/rad", "N\\,m/rad", 1, 0), ("mN.m/rad", "mN\u00b7m/rad", "mN\\,m/rad", 1e-3, 0)],
+    "angular_acceleration": [("rad/s2", "rad/s\u00b2", "rad/s^2", 1, 0), ("deg/s2", "\u00b0/s\u00b2", "^\\circ/s^2", math.pi / 180, 0)],
+    "voltage_rate": [("V/s", "V/s", "V/s", 1, 0), ("V/ms", "V/ms", "V/ms", 1e3, 0)],
+    "current_rate": [("A/s", "A/s", "A/s", 1, 0), ("A/ms", "A/ms", "A/ms", 1e3, 0)],
+    "concentration": [("mol/L", "mol/L", "mol/L", 1, 0), ("mmol/L", "mmol/L", "mmol/L", 1e-3, 0),
+                      ("g/L", "g/L", "g/L", 1, 0), ("mg/L", "mg/L", "mg/L", 1e-3, 0)],
+    "concentration_rate": [("/s", "per s", "s^{-1}", 1, 0), ("/min", "per min", "min^{-1}", 1 / 60, 0),
+                           ("/h", "per h", "h^{-1}", 1 / 3600, 0)],
+    "plain_rate": [("/s", "per s", "s^{-1}", 1, 0), ("/min", "per min", "min^{-1}", 1 / 60, 0),
+                   ("/h", "per h", "h^{-1}", 1 / 3600, 0), ("/d", "per day", "d^{-1}", 1 / 86400, 0)],
+    "specific_energy": [("J/kg", "J/kg", "J/kg", 1, 0), ("MJ/kg", "MJ/kg", "MJ/kg", 1e6, 0)],
+    "specific_angular_momentum": [("m2/s", "m\u00b2/s", "m^2/s", 1, 0), ("km2/s", "km\u00b2/s", "km^2/s", 1e6, 0)],
+    "friction": [("", "", "", 1, 0)],
+    "plain": [("", "", "", 1, 0)],
 }
 
 QUANTITIES = sorted(_U)
@@ -154,7 +175,7 @@ def tex(value, quantity, prefer=None, digits=4):
 def both(value, quantity, prefer=None):
     """Text in the preferred unit, with the SI value added when that differs."""
     main = text(value, quantity, prefer)
-    if quantity in ("amount", "amount_rate"):
+    if quantity in ("amount", "amount_rate", "concentration", "concentration_rate", "plain", "plain_rate"):
         return main            # these have no single SI unit to echo
     si = text(value, quantity, _U[quantity][0][0])
     return main if main == si else "%s (%s)" % (main, si)

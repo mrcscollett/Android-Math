@@ -653,12 +653,17 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
             pendingPhysics = Triple("physics", fields, openTab)
             return
         }
-        val scenario = catalog.scenario(fields["equation"] ?: "") ?: return
+        val requested = fields["equation"] ?: ""
+        val scenario = catalog.scenario(requested) ?: return
+        // An id from before the general systems opens its replacement with the matching switches on.
+        val legacy = catalog.legacyEffects(requested)
         openScenario(scenario.id)
+        physicsEffects.putAll(legacy)
         scenario.presets.firstOrNull { it.id == fields["preset"] }?.let { applyPreset(it) }
         val saved = fields["inputs"]?.let { PhysicsInputs.decode(it) }
         if (saved != null) {
             resetPhysics(scenario)
+            physicsEffects.putAll(legacy)
             for ((id, entry) in saved.values) {
                 physicsValues[id] = entry.first
                 if (entry.second.isNotEmpty()) physicsUnits[id] = entry.second

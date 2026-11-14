@@ -2676,12 +2676,13 @@ def test_surface_errors_and_previews():
     assert not json.loads(preview("q", "vector:gradient"))["ok"]
 
 
-# ---- physics models: knowns -> unknowns --------------------------------------
+# ---- physics: general systems, knowns -> unknowns ----------------------------
 
 from deengine import physics, physics_catalog
 from deengine.scenarios import units as punits
 
 _CAT = {s["id"]: s for s in json.loads(physics_catalog())["scenarios"]}
+G0 = 9.81
 
 
 def _phys(model, values=None, effects=None, preset=None):
@@ -2696,6 +2697,10 @@ def _phys(model, values=None, effects=None, preset=None):
 
 def _found(r):
     return {f["id"]: f["value"] for f in r["physics"]["found"]}
+
+
+def _missing(r):
+    return {m["id"]: m["reason"] for m in r["physics"]["missing"]}
 
 
 def _all_values(model, values, effects):
@@ -2726,63 +2731,99 @@ def _rk4(deriv, state, t_end, steps=20000):
     return state
 
 
+def _on(eff, key, value="on"):
+    return eff.get(key) == value
+
+
 def _reference(model, eff, V):
     """The state at the moment, {variable: value}, from the physics written out afresh."""
     t = V["t"]
-    if model == "falling":
-        ge = V["g"] * (1 - V["rhof"] * V["vol"] / V["m"]) if eff.get("buoyancy") == "on" else V["g"]
+    if model == "line":
+        grav = eff.get("gravity", "none")
+        forces = grav != "none" or _on(eff, "force") or eff.get("drag", "none") != "none" or _on(eff, "spring") \
+            or _on(eff, "driving")
 
-        def d(_t, s):
-            acc = -ge * (V["re"] / (V["re"] + s[0])) ** 2 if eff.get("gravity") == "on" else -ge
-            if eff.get("drag") == "linear":
-                acc -= V["b"] / V["m"] * s[1]
-            if eff.get("drag") == "quadratic":
-                acc -= V["c"] / V["m"] * s[1] * abs(s[1])
-            return [s[1], acc]
-        y, v = _rk4(d, [V["y0"], V["v0"]], t)
-        return {"y": y, "v": v}
-    if model == "projectile":
-        wind = V.get("w", 0.0) if eff.get("drag", "none") != "none" else 0.0
-
-        def d(_t, s):
-            rx, ry = s[2] - wind, s[3]
-            if eff.get("drag") == "linear":
-                k = V["b"] / V["m"]
-            elif eff.get("drag") == "quadratic":
-                k = V["c"] / V["m"] * math.hypot(rx, ry)
-            else:
-                k = 0.0
-            return [s[2], s[3], -k * rx, -V["g"] - k * ry]
-        x, y, vx, vy = _rk4(d, [0.0, V["y0"], V["v0"] * math.cos(V["ang"]), V["v0"] * math.sin(V["ang"])], t)
-        return {"x": x, "y": y, "spd": math.hypot(vx, vy)}
-    if model == "spring":
         def d(tt, s):
-            force = -V["k"] * s[0]
-            if eff.get("damping") == "on":
-                force -= V["c"] * s[1]
-            if eff.get("driving") == "on":
-                force += V["F0"] * math.cos(V["w"] * tt)
-            if eff.get("gravity") == "on":
-                force += V["m"] * V["g"]
-            return [s[1], force / V["m"]]
-        x, v = _rk4(d, [V["x0"], V["v0"]], t)
-        return {"x": x, "v": v}
-    if model == "pendulum":
+            x, vel = s
+            if not forces:
+                return [vel, V["acc"]]
+            m = V.get("m", 1.0)
+            a = 0.0
+            if grav == "vertical":
+                a -= V["g"]
+            if grav == "surface":
+                a -= V["g"] * math.sin(V["inc"])
+            if _on(eff, "buoyancy"):
+                a += V["rhof"] * V["vol"] * V["g"] / m
+            if _on(eff, "varying"):
+                a *= (V["re"] / (V["re"] + x)) ** 2
+            if _on(eff, "force"):
+                a += V["F"] / m
+            if eff.get("drag") == "linear":
+                a -= V["b"] / m * vel
+            if eff.get("drag") == "quadratic":
+                a -= V["c"] / m * vel * abs(vel)
+            if _on(eff, "spring"):
+                a -= V["k"] / m * x
+            if _on(eff, "driving"):
+                a += V["F0"] / m * math.cos(V["w"] * tt)
+            return [vel, a]
+        x, vel = _rk4(d, [V["x0"], V["v0"]], t)
+        return {"x": x, "v": vel}
+    if model == "plane":
+        m = V.get("m", 1.0)
+        wind = V.get("w", 0.0) if _on(eff, "wind") else 0.0
+
         def d(_t, s):
-            pull = math.sin(s[0]) if eff.get("large") == "on" else s[0]
-            return [s[1], -V["g"] / V["L"] * pull - (V["gam"] * s[1] if eff.get("damping") == "on" else 0.0)]
+            x, y, vx, vy = s
+            ax, ay = 0.0, (-V["g"] if _on(eff, "gravity") else 0.0)
+            rx, ry = vx - wind, vy
+            if eff.get("drag") == "linear":
+                ax, ay = ax - V["b"] / m * rx, ay - V["b"] / m * ry
+            if eff.get("drag") == "quadratic":
+                k = V["c"] / m * math.hypot(rx, ry)
+                ax, ay = ax - k * rx, ay - k * ry
+            if _on(eff, "efield"):
+                ax, ay = ax + V["q"] * V["Ex"] / m, ay + V["q"] * V["Ey"] / m
+            if _on(eff, "bfield"):
+                ax, ay = ax + V["q"] * V["B"] * vy / m, ay - V["q"] * V["B"] * vx / m
+            if _on(eff, "central"):
+                r3 = math.hypot(x, y) ** 3
+                ax, ay = ax - V["GM"] * x / r3, ay - V["GM"] * y / r3
+            return [vx, vy, ax, ay]
+        x, y, vx, vy = _rk4(d, [V["x0"], V["y0"], V["v0"] * math.cos(V["ang"]), V["v0"] * math.sin(V["ang"])], t)
+        return {"x": x, "y": y, "vx": vx, "vy": vy, "spd": math.hypot(vx, vy)}
+    if model == "rotation":
+        grav = eff.get("gravity", "point")
+        if grav == "none" and not _on(eff, "torsion") and not _on(eff, "damping"):
+            al = V["tq"] / V["I"] if _on(eff, "torque") else V["alpha"]
+            return {"th": V["th0"] + V["om0"] * t + al * t * t / 2, "om": V["om0"] + al * t}
+        inertia = V["m"] * V["L"] ** 2 if grav == "point" and "m" in V else V.get("I")
+        a = V["g"] / V["L"] if grav == "point" else (V["m"] * V["g"] * V["d"] / V["I"] if grav == "body" else 0.0)
+
+        def d(_t, s):
+            acc = -a * (math.sin(s[0]) if _on(eff, "large") else s[0])
+            if _on(eff, "torsion"):
+                acc -= V["kappa"] / inertia * s[0]
+            if _on(eff, "damping"):
+                acc -= V["gam"] * s[1]
+            if _on(eff, "torque"):
+                acc += V["tq"] / inertia
+            return [s[1], acc]
         th, om = _rk4(d, [V["th0"], V["om0"]], t)
         return {"th": th, "om": om}
-    if model == "cooling":
-        src = V["s"] if eff.get("source") == "on" else 0.0
-        d = lambda _t, s: [-V["k"] * (s[0] - V["Ta"]) + src]
-        return {"T": _rk4(d, [V["T0"]], t)[0], "T2": _rk4(d, [V["T0"]], V["t2"])[0]}
-    if model == "decay":
-        sign = 1.0 if eff.get("kind") == "growth" else -1.0
-        d = lambda _t, s: [sign * V["lam"] * s[0]]
-        return {"frac": _rk4(d, [1.0], t)[0], "N2": V["N0"] * _rk4(d, [1.0], V["t2"])[0]}
-    if model == "rc":
-        rs = V["R"] + (V["r"] if eff.get("internal") == "on" else 0.0)
+    if model == "change":
+        kind, law = eff.get("what", "gen"), eff.get("law", "decay")
+        src = V["s_" + kind] if _on(eff, "source") else 0.0
+        base = V["yinf_" + kind] if law == "level" else 0.0
+        sign = 1.0 if law == "growth" else -1.0
+        d = lambda _t, s: [sign * V["k"] * (s[0] - base) + src]
+        out = {"y_" + kind: _rk4(d, [V["y0_" + kind]], t)[0]}
+        if "t2" in V:
+            out["y2_" + kind] = _rk4(d, [V["y0_" + kind]], V["t2"])[0]
+        return out
+    if model == "circuit":
+        rs = (V["R"] if _on(eff, "res") else 0.0) + (V["r"] if _on(eff, "internal") else 0.0)
 
         def source(tt):
             if eff.get("source") == "battery":
@@ -2790,80 +2831,141 @@ def _reference(model, eff, V):
             if eff.get("source") == "ac":
                 return V["vamp"] * math.cos(2 * math.pi * V["freq"] * tt)
             return 0.0
-        # Current into the capacitor = current through the series resistance minus the leak.
-        d = lambda tt, s: [((source(tt) - s[0]) / rs - (s[0] / V["rl"] if eff.get("leak") == "on" else 0.0)) / V["C"]]
-        vc = _rk4(d, [V["vc0"]], t)[0]
-        return {"vc": vc, "q": V["C"] * vc, "i": (source(t) - vc) / rs, "ec": 0.5 * V["C"] * vc ** 2}
-    if model == "rl":
-        rs = V["R"] + (V["r"] if eff.get("internal") == "on" else 0.0)
-
-        def source(tt):
-            if eff.get("source") == "battery":
-                return V["V"]
-            if eff.get("source") == "ac":
-                return V["vamp"] * math.cos(2 * math.pi * V["freq"] * tt)
-            return 0.0
+        leak = (lambda vc: vc / V["rl"]) if _on(eff, "leak") else (lambda vc: 0.0)
+        if _on(eff, "ind") and _on(eff, "cap"):
+            d = lambda tt, s: [(s[1] - leak(s[0])) / V["C"], (source(tt) - rs * s[1] - s[0]) / V["L"]]
+            vc, i = _rk4(d, [V["vc0"], V["i0"]], t)
+            return {"vc": vc, "i": i, "q": V["C"] * vc, "ec": 0.5 * V["C"] * vc ** 2, "el": 0.5 * V["L"] * i * i}
+        if _on(eff, "cap"):
+            # Current into the capacitor = current through the series resistance minus the leak.
+            d = lambda tt, s: [((source(tt) - s[0]) / rs - leak(s[0])) / V["C"]]
+            vc = _rk4(d, [V["vc0"]], t)[0]
+            return {"vc": vc, "q": V["C"] * vc, "i": (source(t) - vc) / rs, "ec": 0.5 * V["C"] * vc ** 2}
         i = _rk4(lambda tt, s: [(source(tt) - rs * s[0]) / V["L"]], [V["i0"]], t)[0]
         return {"i": i, "vl": source(t) - rs * i, "el": 0.5 * V["L"] * i * i}
     raise AssertionError(model)
 
 
+_VERT = {"gravity": "vertical"}
+_RC = {"res": "on", "cap": "on"}
+_RL = {"res": "on", "ind": "on"}
+_RLC = {"res": "on", "ind": "on", "cap": "on"}
+
 PHYSICS_CASES = [
-    ("falling", {}, dict(g=(9.81, "m/s2"), v0=(12, "m/s"), y0=(30, "m"), t=(1.7, "s"))),
-    ("falling", {"drag": "linear"}, dict(m=(2, "kg"), g=(9.81, "m/s2"), v0=(5, "m/s"), y0=(40, "m"),
-                                         b=(0.8, "kg/s"), t=(2.2, "s"))),
-    ("falling", {"drag": "quadratic"}, dict(m=(80, "kg"), g=(9.81, "m/s2"), v0=(0, "m/s"), y0=(900, "m"),
-                                            c=(0.3, "kg/m"), t=(6, "s"))),
-    ("falling", {"drag": "quadratic"}, dict(m=(0.5, "kg"), g=(9.81, "m/s2"), v0=(15, "m/s"), y0=(3, "m"),
-                                            c=(0.01, "kg/m"), t=(2.5, "s"))),
-    ("falling", {"drag": "linear", "buoyancy": "on"},
-     dict(m=(3, "kg"), g=(9.81, "m/s2"), v0=(0, "m/s"), y0=(20, "m"), b=(2, "kg/s"), rhof=(1000, "kg/m3"),
+    # --- motion along a line
+    ("line", {}, dict(acc=(-3, "m/s2"), x0=(2, "m"), v0=(12, "m/s"), t=(3, "s"))),
+    ("line", _VERT, dict(g=(G0, "m/s2"), v0=(12, "m/s"), x0=(30, "m"), t=(1.7, "s"))),
+    ("line", dict(_VERT, drag="linear"), dict(m=(2, "kg"), g=(G0, "m/s2"), v0=(5, "m/s"), x0=(40, "m"),
+                                              b=(0.8, "kg/s"), t=(2.2, "s"))),
+    ("line", dict(_VERT, drag="quadratic"), dict(m=(80, "kg"), g=(G0, "m/s2"), v0=(0, "m/s"), x0=(900, "m"),
+                                                 c=(0.3, "kg/m"), t=(6, "s"))),
+    ("line", dict(_VERT, drag="quadratic"), dict(m=(0.5, "kg"), g=(G0, "m/s2"), v0=(15, "m/s"), x0=(3, "m"),
+                                                 c=(0.01, "kg/m"), t=(2.5, "s"))),
+    ("line", dict(_VERT, drag="linear", buoyancy="on"),
+     dict(m=(3, "kg"), g=(G0, "m/s2"), v0=(0, "m/s"), x0=(20, "m"), b=(2, "kg/s"), rhof=(1000, "kg/m3"),
           vol=(0.001, "m3"), t=(1.5, "s"))),
-    ("falling", {"gravity": "on"}, dict(g=(9.81, "m/s2"), v0=(0, "m/s"), y0=(400, "km"), re=(6371, "km"),
-                                        t=(100, "s"))),
-    ("projectile", {}, dict(v0=(20, "m/s"), ang=(40, "deg"), y0=(1.5, "m"), g=(9.81, "m/s2"), t=(1.1, "s"))),
-    ("projectile", {"drag": "linear", "wind": "on"},
-     dict(v0=(30, "m/s"), ang=(35, "deg"), y0=(0, "m"), g=(9.81, "m/s2"), m=(0.4, "kg"), b=(0.05, "kg/s"),
-          w=(-4, "m/s"), t=(1.3, "s"))),
-    ("projectile", {"drag": "quadratic"},
-     dict(v0=(40, "m/s"), ang=(25, "deg"), y0=(1, "m"), g=(9.81, "m/s2"), m=(0.145, "kg"), c=(0.0012, "kg/m"),
-          t=(1.0, "s"))),
-    ("spring", {}, dict(m=(0.5, "kg"), k=(20, "N/m"), x0=(0.1, "m"), v0=(0.3, "m/s"), t=(0.4, "s"))),
-    ("spring", {"damping": "on"}, dict(m=(400, "kg"), k=(40000, "N/m"), x0=(0.05, "m"), v0=(0, "m/s"),
-                                       c=(3500, "kg/s"), t=(0.3, "s"))),
-    ("spring", {"damping": "on", "driving": "on", "gravity": "on"},
-     dict(m=(2, "kg"), k=(50, "N/m"), x0=(0.02, "m"), v0=(0.1, "m/s"), c=(3, "kg/s"), F0=(4, "N"),
-          w=(6, "rad/s"), g=(9.81, "m/s2"), t=(0.9, "s"))),
-    ("pendulum", {}, dict(L=(1.2, "m"), g=(9.81, "m/s2"), th0=(8, "deg"), om0=(0.1, "rad/s"), t=(0.7, "s"))),
-    ("pendulum", {"large": "on"}, dict(L=(2.5, "m"), g=(9.81, "m/s2"), th0=(60, "deg"), om0=(0, "rad/s"),
-                                       t=(0.6, "s"))),
-    ("pendulum", {"large": "on", "damping": "on"},
-     dict(L=(0.8, "m"), g=(9.81, "m/s2"), th0=(50, "deg"), om0=(0.2, "rad/s"), gam=(0.4, "1/s"), t=(1.2, "s"))),
-    ("cooling", {}, dict(T0=(90, "C"), Ta=(22, "C"), k=(0.05, "1/min"), t=(7, "min"), t2=(15, "min"))),
-    ("cooling", {"source": "on"}, dict(T0=(25, "C"), Ta=(20, "C"), k=(0.05, "1/s"), s=(3, "K/s"), t=(30, "s"),
-                                       t2=(70, "s"))),
-    ("decay", {"kind": "decay"}, dict(th=(8.02, "d"), N0=(400, "MBq"), t=(30, "d"), t2=(50, "d"))),
-    ("decay", {"kind": "growth"}, dict(th=(20, "min"), N0=(1000, ""), t=(90, "min"), t2=(120, "min"))),
-    ("rc", {"source": "battery"}, dict(R=(2000, "ohm"), C=(120, "uF"), V=(300, "V"), vc0=(20, "V"), t=(0.3, "s"))),
-    ("rc", {"source": "battery", "internal": "on", "leak": "on"},
+    ("line", dict(_VERT, varying="on"), dict(g=(G0, "m/s2"), v0=(0, "m/s"), x0=(400, "km"), re=(6371, "km"),
+                                             t=(100, "s"))),
+    ("line", {"gravity": "surface", "force": "on"},
+     dict(m=(4, "kg"), g=(G0, "m/s2"), inc=(25, "deg"), F=(30, "N"), x0=(0.5, "m"), v0=(1, "m/s"), t=(2, "s"))),
+    ("line", {"force": "on", "drag": "linear"},
+     dict(m=(1200, "kg"), F=(3000, "N"), b=(90, "kg/s"), x0=(0, "m"), v0=(4, "m/s"), t=(8, "s"))),
+    ("line", {"drag": "quadratic"}, dict(m=(1000, "kg"), c=(0.6, "kg/m"), x0=(0, "m"), v0=(30, "m/s"), t=(10, "s"))),
+    ("line", {"spring": "on"}, dict(m=(0.5, "kg"), k=(20, "N/m"), x0=(0.1, "m"), v0=(0.3, "m/s"), t=(0.4, "s"))),
+    ("line", {"spring": "on", "drag": "linear"},
+     dict(m=(400, "kg"), k=(40000, "N/m"), x0=(0.05, "m"), v0=(0, "m/s"), b=(3500, "kg/s"), t=(0.3, "s"))),
+    ("line", {"spring": "on", "drag": "linear", "driving": "on", "gravity": "vertical"},
+     dict(m=(2, "kg"), k=(50, "N/m"), x0=(0.02, "m"), v0=(0.1, "m/s"), b=(3, "kg/s"), F0=(4, "N"),
+          w=(6, "rad/s"), g=(G0, "m/s2"), t=(0.9, "s"))),
+    ("line", {"spring": "on", "drag": "quadratic"},
+     dict(m=(1, "kg"), k=(30, "N/m"), c=(0.5, "kg/m"), x0=(0.3, "m"), v0=(0, "m/s"), t=(1.1, "s"))),
+    ("line", {"driving": "on", "drag": "linear"},
+     dict(m=(2, "kg"), b=(1, "kg/s"), F0=(5, "N"), w=(3, "rad/s"), x0=(0, "m"), v0=(0, "m/s"), t=(2.5, "s"))),
+    # --- motion in a plane
+    ("plane", {}, dict(x0=(1, "m"), y0=(-2, "m"), v0=(5, "m/s"), ang=(140, "deg"), t=(3, "s"))),
+    ("plane", {"gravity": "on"}, dict(v0=(20, "m/s"), ang=(40, "deg"), x0=(0, "m"), y0=(1.5, "m"),
+                                      g=(G0, "m/s2"), t=(1.1, "s"))),
+    ("plane", {"gravity": "on", "drag": "linear", "wind": "on"},
+     dict(v0=(30, "m/s"), ang=(35, "deg"), x0=(0, "m"), y0=(0, "m"), g=(G0, "m/s2"), m=(0.4, "kg"),
+          b=(0.05, "kg/s"), w=(-4, "m/s"), t=(1.3, "s"))),
+    ("plane", {"gravity": "on", "drag": "quadratic"},
+     dict(v0=(40, "m/s"), ang=(25, "deg"), x0=(0, "m"), y0=(1, "m"), g=(G0, "m/s2"), m=(0.145, "kg"),
+          c=(0.0012, "kg/m"), t=(1.0, "s"))),
+    ("plane", {"bfield": "on"}, dict(m=(2, "kg"), q=(0.5, "C"), B=(3, "T"), v0=(4, "m/s"), ang=(30, "deg"),
+                                     x0=(0, "m"), y0=(0, "m"), t=(1.3, "s"))),
+    ("plane", {"efield": "on", "bfield": "on"},
+     dict(m=(1, "kg"), q=(-1, "C"), Ex=(0.5, "V/m"), Ey=(-1, "V/m"), B=(2, "T"), v0=(3, "m/s"), ang=(-20, "deg"),
+          x0=(1, "m"), y0=(0, "m"), t=(2, "s"))),
+    ("plane", {"gravity": "on", "efield": "on"},
+     dict(m=(0.002, "kg"), q=(0.00001, "C"), Ex=(800, "V/m"), Ey=(500, "V/m"), g=(G0, "m/s2"), v0=(2, "m/s"),
+          ang=(60, "deg"), x0=(0, "m"), y0=(0.5, "m"), t=(0.4, "s"))),
+    ("plane", {"central": "on"}, dict(GM=(398600, "km3/s2"), x0=(7000, "km"), y0=(0, "km"), v0=(8, "km/s"),
+                                      ang=(80, "deg"), t=(1500, "s"))),
+    # --- rotation and pendulums
+    ("rotation", {"gravity": "none"}, dict(alpha=(-2, "rad/s2"), th0=(0.3, "rad"), om0=(9, "rad/s"), t=(2.5, "s"))),
+    ("rotation", {"gravity": "none", "torque": "on"},
+     dict(I=(0.5, "kg.m2"), tq=(2, "N.m"), th0=(0, "rad"), om0=(1, "rad/s"), t=(4, "s"))),
+    ("rotation", {"gravity": "none", "torsion": "on", "damping": "on"},
+     dict(I=(0.002, "kg.m2"), kappa=(0.04, "N.m/rad"), gam=(0.5, "1/s"), th0=(0.4, "rad"), om0=(0, "rad/s"),
+          t=(1.2, "s"))),
+    ("rotation", {"gravity": "point"}, dict(L=(1.2, "m"), g=(G0, "m/s2"), th0=(8, "deg"), om0=(0.1, "rad/s"),
+                                            t=(0.7, "s"))),
+    ("rotation", {"gravity": "point", "large": "on"},
+     dict(L=(2.5, "m"), g=(G0, "m/s2"), th0=(60, "deg"), om0=(0, "rad/s"), t=(0.6, "s"))),
+    ("rotation", {"gravity": "point", "large": "on", "damping": "on"},
+     dict(L=(0.8, "m"), g=(G0, "m/s2"), th0=(50, "deg"), om0=(0.2, "rad/s"), gam=(0.4, "1/s"), t=(1.2, "s"))),
+    ("rotation", {"gravity": "body", "large": "on", "torque": "on"},
+     dict(m=(0.15, "kg"), I=(0.05, "kg.m2"), d=(0.5, "m"), g=(G0, "m/s2"), tq=(0.2, "N.m"), th0=(20, "deg"),
+          om0=(0, "rad/s"), t=(0.9, "s"))),
+    # --- first-order change
+    ("change", {"what": "temp", "law": "level"},
+     dict(y0_temp=(90, "C"), yinf_temp=(22, "C"), k=(0.05, "1/min"), t=(7, "min"), t2=(15, "min"))),
+    ("change", {"what": "temp", "law": "level", "source": "on"},
+     dict(y0_temp=(25, "C"), yinf_temp=(20, "C"), k=(0.05, "1/s"), s_temp=(3, "K/s"), t=(30, "s"), t2=(70, "s"))),
+    ("change", {"what": "amt", "law": "decay"}, dict(th=(8.02, "d"), y0_amt=(400, "MBq"), t=(30, "d"), t2=(50, "d"))),
+    ("change", {"what": "pop", "law": "growth"}, dict(th=(20, "min"), y0_pop=(1000, ""), t=(90, "min"), t2=(120, "min"))),
+    ("change", {"what": "conc", "law": "decay", "source": "on"},
+     dict(y0_conc=(0.2, "mol/L"), k=(0.3, "1/s"), s_conc=(0.03, "/s"), t=(4, "s"))),
+    ("change", {"what": "volt", "law": "level"}, dict(y0_volt=(0, "V"), yinf_volt=(5, "V"), tau=(2, "s"), t=(3, "s"))),
+    ("change", {"what": "cur", "law": "decay"}, dict(y0_cur=(3, "A"), k=(500, "1/s"), t=(0.002, "s"))),
+    ("change", {"what": "spd", "law": "decay"}, dict(y0_spd=(12, "m/s"), k=(0.4, "1/s"), t=(3, "s"))),
+    ("change", {"what": "gen", "law": "growth", "source": "on"},
+     dict(y0_gen=(2, ""), k=(0.5, "1/s"), s_gen=(1.5, "/s"), t=(2, "s"))),
+    # --- series circuit
+    ("circuit", dict(_RC, source="battery"), dict(R=(2000, "ohm"), C=(120, "uF"), V=(300, "V"), vc0=(20, "V"),
+                                                  t=(0.3, "s"))),
+    ("circuit", dict(_RC, source="battery", internal="on", leak="on"),
      dict(R=(1000, "ohm"), C=(10, "uF"), V=(12, "V"), vc0=(0, "V"), r=(50, "ohm"), rl=(0.1, "Mohm"), t=(0.02, "s"))),
-    ("rc", {"source": "discharge"}, dict(R=(50, "ohm"), C=(32, "uF"), vc0=(5000, "V"), t=(0.002, "s"))),
-    ("rc", {"source": "ac", "internal": "on"},
+    ("circuit", dict(_RC, source="none"), dict(R=(50, "ohm"), C=(32, "uF"), vc0=(5000, "V"), t=(0.002, "s"))),
+    ("circuit", dict(_RC, source="ac", internal="on"),
      dict(R=(1000, "ohm"), C=(0.1, "uF"), vamp=(2, "V"), freq=(3000, "Hz"), vc0=(0.5, "V"), r=(100, "ohm"),
           t=(0.00013, "s"))),
-    ("rl", {"source": "battery"}, dict(L=(200, "mH"), R=(240, "ohm"), V=(12, "V"), i0=(0.01, "A"), t=(0.001, "s"))),
-    ("rl", {"source": "none", "internal": "on"}, dict(L=(30, "mH"), R=(15, "ohm"), r=(2, "ohm"), i0=(3, "A"),
-                                                      t=(0.002, "s"))),
-    ("rl", {"source": "ac"}, dict(L=(50, "mH"), R=(10, "ohm"), vamp=(325, "V"), freq=(50, "Hz"), i0=(1, "A"),
-                                  t=(0.004, "s"))),
+    ("circuit", dict(_RL, source="battery"), dict(L=(200, "mH"), R=(240, "ohm"), V=(12, "V"), i0=(0.01, "A"),
+                                                  t=(0.001, "s"))),
+    ("circuit", dict(_RL, source="none", internal="on"), dict(L=(30, "mH"), R=(15, "ohm"), r=(2, "ohm"),
+                                                              i0=(3, "A"), t=(0.002, "s"))),
+    ("circuit", dict(_RL, source="ac"), dict(L=(50, "mH"), R=(10, "ohm"), vamp=(325, "V"), freq=(50, "Hz"),
+                                             i0=(1, "A"), t=(0.004, "s"))),
+    ("circuit", {"ind": "on", "cap": "on"}, dict(L=(10, "mH"), C=(100, "nF"), vc0=(5, "V"), i0=(0.002, "A"),
+                                                 t=(0.00007, "s"))),
+    ("circuit", _RLC, dict(R=(10, "ohm"), L=(1, "mH"), C=(1, "uF"), vc0=(10, "V"), i0=(0, "A"), t=(0.0002, "s"))),
+    ("circuit", _RLC, dict(R=(2000, "ohm"), L=(1, "mH"), C=(1, "uF"), vc0=(10, "V"), i0=(0, "A"), t=(0.001, "s"))),
+    ("circuit", dict(_RLC, source="battery"),
+     dict(R=(63.245553, "ohm"), L=(1, "mH"), C=(1, "uF"), V=(9, "V"), vc0=(0, "V"), i0=(0, "A"), t=(0.0001, "s"))),
+    ("circuit", dict(_RLC, source="ac", internal="on"),
+     dict(R=(20, "ohm"), r=(5, "ohm"), L=(2, "mH"), C=(0.5, "uF"), vamp=(3, "V"), freq=(4000, "Hz"), vc0=(1, "V"),
+          i0=(0, "A"), t=(0.0003, "s"))),
+    ("circuit", dict(_RLC, leak="on"),
+     dict(R=(10, "ohm"), L=(1, "mH"), C=(1, "uF"), rl=(500, "ohm"), vc0=(10, "V"), i0=(0, "A"), t=(0.0002, "s"))),
 ]
+_CASE_IDS = ["%s-%d" % (c[0], i) for i, c in enumerate(PHYSICS_CASES)]
 
 
 def _close(a, b, scale=1.0, rel=2e-4):
     return abs(a - b) <= rel * max(abs(a), abs(b)) + 1e-6 * scale
 
 
-@pytest.mark.parametrize("model,eff,knowns", PHYSICS_CASES)
+@pytest.mark.parametrize("model,eff,knowns", PHYSICS_CASES, ids=_CASE_IDS)
 def test_physics_solution_matches_independent_integration(model, eff, knowns):
     V, r = _all_values(model, knowns, eff)
     assert r["methods"][0]["verified"] is True, r["methods"][0]["verify_note"]
@@ -2875,7 +2977,12 @@ def test_physics_solution_matches_independent_integration(model, eff, knowns):
         assert _close(V[name], want, scale, 5e-4), (name, V[name], want)
 
 
-@pytest.mark.parametrize("model,eff,knowns", PHYSICS_CASES)
+# Quantities that are a one-way summary of the motion: several different starts share the same
+# value (or it is a branch of a sign), so they are checked as outputs but not blanked as inputs.
+_ONE_WAY = {"E", "em", "elost", "ek", "tg", "vi", "tstop", "xstop", "dstop", "revs", "vmax", "Tex"}
+
+
+@pytest.mark.parametrize("model,eff,knowns", PHYSICS_CASES, ids=_CASE_IDS)
 def test_physics_any_variable_can_be_the_unknown(model, eff, knowns):
     """Blank each variable in turn: the solver must recover it from all the others."""
     V, _ = _all_values(model, knowns, eff)
@@ -2889,52 +2996,65 @@ def test_physics_any_variable_can_be_the_unknown(model, eff, knowns):
         assert _close(got[unknown], V[unknown], scale[unknown]), (unknown, got[unknown], V[unknown])
 
 
-@pytest.mark.parametrize("model,eff,knowns,blank", [
-    ("projectile", {}, PHYSICS_CASES[6][2], ("ang", "t")),
-    ("rc", {"source": "battery"}, PHYSICS_CASES[19][2], ("R", "tau")),
-    ("rc", {"source": "battery"}, PHYSICS_CASES[19][2], ("C", "t")),
-    ("spring", {"damping": "on"}, PHYSICS_CASES[10][2], ("m", "c")),
-    ("cooling", {}, PHYSICS_CASES[15][2], ("k", "t2")),
-    ("falling", {"drag": "linear"}, PHYSICS_CASES[1][2], ("b", "t")),
-    ("rl", {"source": "battery"}, PHYSICS_CASES[23][2], ("L", "V")),
-    ("decay", {"kind": "decay"}, PHYSICS_CASES[17][2], ("th", "t2")),
+def _case(model, eff):
+    return next(c for c in PHYSICS_CASES if c[0] == model and c[1] == eff)
+
+
+@pytest.mark.parametrize("model,eff,blank", [
+    ("line", {}, ("acc", "t")),
+    ("line", {"spring": "on", "drag": "linear"}, ("m", "b")),
+    ("line", dict(_VERT, drag="linear"), ("b", "t")),
+    ("plane", {"gravity": "on"}, ("ang", "t")),
+    ("rotation", {"gravity": "none"}, ("alpha", "t")),
+    ("change", {"what": "temp", "law": "level"}, ("k", "t2")),
+    ("change", {"what": "amt", "law": "decay"}, ("th", "t2")),
+    ("circuit", dict(_RC, source="battery"), ("R", "tau")),
+    ("circuit", dict(_RC, source="battery"), ("C", "t")),
+    ("circuit", dict(_RL, source="battery"), ("L", "V")),
 ])
-def test_physics_two_unknowns_at_once(model, eff, knowns, blank):
-    V, _ = _all_values(model, knowns, eff)
+def test_physics_two_unknowns_at_once(model, eff, blank):
+    V, _ = _all_values(model, _case(model, eff)[2], eff)
     rest = {k: x for k, x in V.items() if k not in blank}
     r = _phys(model, _si(model, rest), eff)
     assert r["ok"], r.get("error")
     got = _found(r)
     for name in blank:
-        assert name in got and _close(got[name], V[name], 1.0, 1e-3), (name, got.get(name), V[name])
+        assert name in got, (name, r["physics"]["missing"])
+        assert _close(got[name], V[name], abs(V[name])), (name, got[name], V[name])
 
 
 def test_physics_known_answers():
-    f = _found(_phys("falling", preset="thrown"))
-    disc = math.sqrt(20 ** 2 + 2 * 9.81 * 1.5)
-    assert abs(f["tg"] - (20 + disc) / 9.81) < 1e-6 and abs(f["vi"] - disc) < 1e-6
-    assert abs(f["ymax"] - (1.5 + 400 / (2 * 9.81))) < 1e-6
-    sky = _found(_phys("falling", preset="skydiver"))
-    assert abs(sky["vt"] - math.sqrt(80 * 9.81 / (0.5 * 1.225 * 1.0 * 0.5))) < 1e-6
-    kick = _found(_phys("projectile", preset="kick"))
-    assert abs(kick["rng"] - 25 ** 2 * math.sin(math.radians(60)) / 9.81) < 1e-6
-    assert abs(kick["hmax"] - (25 * math.sin(math.radians(30))) ** 2 / (2 * 9.81)) < 1e-6
-    assert abs(_found(_phys("spring", preset="cart"))["k"] - 0.5 * (2 * math.pi) ** 2) < 1e-6
-    assert abs(_found(_phys("spring", preset="door"))["c"] - 2 * math.sqrt(60 * 30)) < 1e-6
-    assert abs(_found(_phys("pendulum", preset="clock"))["L"] - 9.81 / math.pi ** 2) < 1e-9
-    swing = _found(_phys("pendulum", preset="swing"))
+    f = _found(_phys("line", preset="thrown"))
+    disc = math.sqrt(20 ** 2 + 2 * G0 * 1.5)
+    assert abs(f["tg"] - (20 + disc) / G0) < 1e-6 and abs(f["vi"] - disc) < 1e-6
+    assert abs(f["xstop"] - (1.5 + 400 / (2 * G0))) < 1e-6 and abs(f["tstop"] - 20 / G0) < 1e-9
+    sky = _found(_phys("line", preset="skydiver"))
+    assert abs(sky["vt"] - math.sqrt(80 * G0 / (0.5 * 1.225 * 1.0 * 0.5))) < 1e-6
+    assert abs(sky["vt"] - 50.62) < 0.005 and abs(sky["tg"] - 82.59) < 0.005
+    assert abs(_found(_phys("line", preset="cart"))["k"] - 0.5 * (2 * math.pi) ** 2) < 1e-6
+    assert abs(_found(_phys("line", preset="door"))["b"] - 2 * math.sqrt(60 * 30)) < 1e-6
+    assert abs(_found(_phys("line", preset="scale"))["k"] - 2 * G0 / 0.04) < 1e-6
+    accel = _found(_phys("line", preset="accel"))
+    assert abs(accel["acc"] - 4.5) < 1e-9 and abs(accel["x"] - 81) < 1e-9
+    kick = _found(_phys("plane", preset="kick"))
+    assert abs(kick["rng"] - 25 ** 2 * math.sin(math.radians(60)) / G0) < 1e-6
+    assert abs(kick["hmax"] - (25 * math.sin(math.radians(30))) ** 2 / (2 * G0)) < 1e-6
+    assert abs(_found(_phys("rotation", preset="clock"))["L"] - G0 / math.pi ** 2) < 1e-9
+    swing = _found(_phys("rotation", preset="swing"))
     assert abs(swing["Tex"] / swing["T0"] - 1.0731820) < 1e-6      # known ratio for a 60 degree swing
-    assert abs(_found(_phys("decay", preset="carbon"))["t"] - 2 * 5730 * 31557600) < 1.0
-    assert abs(_found(_phys("rc", preset="flash"))["t"] + 0.24 * math.log(0.05)) < 1e-9
-    assert abs(_found(_phys("rc", preset="timer"))["t"] + math.log(1 - 3.3 / 5)) < 1e-9
-    relay = _found(_phys("rl", preset="relay"))
+    assert abs(_found(_phys("change", preset="carbon"))["t"] - 2 * 5730 * 31557600) < 1.0
+    assert abs(_found(_phys("circuit", preset="flash"))["t"] + 0.24 * math.log(0.05)) < 1e-9
+    assert abs(_found(_phys("circuit", preset="timer"))["t"] + math.log(1 - 3.3 / 5)) < 1e-9
+    relay = _found(_phys("circuit", preset="relay"))
     assert abs(relay["t"] + (0.2 / 240) * math.log(1 - 0.035 / 0.05)) < 1e-12
-    coffee = _found(_phys("cooling", preset="coffee"))
+    coffee = _found(_phys("change", preset="coffee"))
     k = math.log(68 / 53) / 300
     assert abs(coffee["k"] - k) < 1e-12 and abs(coffee["t2"] - math.log(68 / 38) / k) < 1e-6
+    tuner = _found(_phys("circuit", preset="tuner"))
+    assert abs(tuner["C"] - 1 / (240e-6 * (2 * math.pi * 1e6) ** 2)) < 1e-18
 
 
-def test_physics_every_preset_solves():
+def test_physics_every_example_solves():
     for model, spec in _CAT.items():
         ids = {f["id"] for f in spec["fields"]}
         for p in spec["presets"]:
@@ -2945,6 +3065,7 @@ def test_physics_every_preset_solves():
             assert r["kind"] == "physics" and ph["found"], (model, p["id"])
             assert all(f["text"] and f["label"] for f in ph["found"])
             assert len(ph["curve"]) > 50 and ph["animation"]["points"], (model, p["id"])
+            assert ph["animation"]["kind"] in ("fall", "spring", "capacitor")
             steps = r["methods"][0]["steps"]
             assert steps[0]["title"].startswith("Set up")
             assert steps[-1]["title"] == "Check" and steps[-1]["kind"] == "check-ok"
@@ -2953,62 +3074,338 @@ def test_physics_every_preset_solves():
             assert r["methods"][0]["verified"] is True
 
 
-def test_physics_several_solutions_are_reported():
-    r = _phys("falling", dict(g=(9.81, "m/s2"), v0=(20, "m/s"), y0=(0, "m"), y=(15, "m")), {})
+def test_physics_form_opens_blank_and_examples_are_optional():
+    """No word problem is built in: nothing is known until the user types it or picks an example."""
+    for model, spec in _CAT.items():
+        assert all(f["default"] is None or f["default"][0] is None for f in spec["fields"]), model
+        for raw in ("", "{}", json.dumps({"values": {}, "effects": {}})):
+            r = json.loads(physics(model, raw))
+            assert not r["ok"] and "Enter the values you know" in r["error"], (model, raw)
+        assert len(spec["presets"]) >= 8
+    # An example is only a set of knowns and switches: typing the same things by hand gives the same answer.
+    for model, pid in (("line", "skydiver"), ("plane", "kick"), ("circuit", "flash"), ("change", "coffee")):
+        p = next(x for x in _CAT[model]["presets"] if x["id"] == pid)
+        by_hand = _phys(model, {k: (v[0], v[1]) for k, v in p["values"].items()}, p["effects"])
+        assert _found(by_hand) == _found(_phys(model, preset=pid)), (model, pid)
+
+
+@pytest.mark.parametrize("acc,x0,v0,t", [(2.5, 0, 0, 4), (-9.81, 10, 15, 2), (3, -5, -4, 1.5), (-2, 7, -1, 3),
+                                         (0, 2, 6, 5), (-4, 0, 20, 5), (1.5, 100, -30, 20)])
+def test_physics_constant_acceleration_in_every_direction(acc, x0, v0, t):
+    """Plain kinematics: any three of the five quantities fix the other two."""
+    x, v = x0 + v0 * t + acc * t * t / 2, v0 + acc * t
+    full = dict(acc=acc, x0=x0, v0=v0, t=t, x=x, v=v)
+    units = dict(acc="m/s2", x0="m", v0="m/s", t="s", x="m", v="m/s")
+    for blank in (("x", "v"), ("acc", "x"), ("acc", "v"), ("v0", "x"), ("v0", "v"), ("x0", "v"), ("t", "x"),
+                  ("acc", "t"), ("v0", "acc")):
+        if acc == 0 and "acc" in blank and "t" in blank:
+            continue
+        given = {k: (repr(float(val)), units[k]) for k, val in full.items() if k not in blank}
+        r = _phys("line", given, {})
+        assert r["ok"], (blank, r.get("error"))
+        got = _found(r)
+        for name in blank:
+            if name not in got:
+                # Only allowed where the numbers really leave it open (two times fit the same position).
+                assert name == "t" or "t" in blank, (blank, name, r["physics"]["missing"])
+                continue
+            ok = abs(got[name] - full[name]) < 1e-6 * max(1.0, abs(full[name]))
+            if not ok:
+                # A second root of the quadratic is a valid answer too: it must reproduce the knowns.
+                alt = dict(full, **{k: got[k] for k in blank if k in got})
+                assert abs(alt["x0"] + alt["v0"] * alt["t"] + alt["acc"] * alt["t"] ** 2 / 2 - alt["x"]) < 1e-6 * max(
+                    1.0, abs(alt["x"])), (blank, got)
+                assert abs(alt["v0"] + alt["acc"] * alt["t"] - alt["v"]) < 1e-6 * max(1.0, abs(alt["v"])), (blank, got)
+    # The forces set the acceleration when they are switched on.
+    f = _found(_phys("line", dict(m=(4, "kg"), F=(10, "N"), x0=(0, "m"), v0=(0, "m/s"), t=(3, "s")), {"force": "on"}))
+    assert abs(f["acc"] - 2.5) < 1e-9 and abs(f["x"] - 11.25) < 1e-9 and abs(f["ek"] - 0.5 * 4 * 7.5 ** 2) < 1e-6
+    f = _found(_phys("line", dict(g=(G0, "m/s2"), inc=(30, "deg"), x0=(0, "m"), v0=(0, "m/s"), t=(2, "s")),
+                     {"gravity": "surface"}))
+    assert abs(f["acc"] + G0 / 2) < 1e-9 and abs(f["x"] + G0) < 1e-9
+    # ...and the force follows from the motion.
+    f = _found(_phys("line", dict(m=(1200, "kg"), x0=(0, "m"), v0=(0, "m/s"), t=(6, "s"), v=(27, "m/s")), {"force": "on"}))
+    assert abs(f["acc"] - 4.5) < 1e-9 and abs(f["F"] - 5400) < 1e-6
+
+
+def test_physics_friction_stops_and_holds():
+    fr = {"gravity": "surface", "friction": "on"}
+    brake = _found(_phys("line", preset="braking"))
+    assert abs(brake["tstop"] - 25 / (0.7 * G0)) < 1e-9 and abs(brake["dstop"] - 25 ** 2 / (2 * 0.7 * G0)) < 1e-9
+    # After it has stopped it stays stopped.
+    later = _found(_phys("line", dict(g=(G0, "m/s2"), inc=(0, "deg"), mu=(0.7, ""), x0=(0, "m"), v0=(25, "m/s"),
+                                      t=(10, "s")), fr))
+    assert abs(later["x"] - brake["dstop"]) < 1e-9 and abs(later["v"]) < 1e-9 and abs(later["a"]) < 1e-9
+    # The friction coefficient from a measured skid.
+    mu = _found(_phys("line", dict(g=(G0, "m/s2"), inc=(0, "deg"), x0=(0, "m"), v0=(20, "m/s"), dstop=(40, "m")), fr))
+    assert abs(mu["mu"] - 400 / (2 * G0 * 40)) < 1e-9
+    # A block at rest on a slope gentler than the friction angle does not move.
+    held = _found(_phys("line", dict(g=(G0, "m/s2"), inc=(15, "deg"), mu=(0.4, ""), x0=(2, "m"), v0=(0, "m/s"),
+                                     t=(5, "s")), fr))
+    assert abs(held["x"] - 2) < 1e-9 and abs(held["v"]) < 1e-9
+    # On a steeper slope it slides down with a = -g (sin - mu cos).
+    al, mu_k = math.radians(30), 0.2
+    a = -G0 * (math.sin(al) - mu_k * math.cos(al))
+    ramp = _found(_phys("line", preset="ramp"))
+    assert abs(ramp["tg"] - math.sqrt(2 * 2 / -a)) < 1e-9 and abs(ramp["vi"] - math.sqrt(2 * -a * 2)) < 1e-9
+    # Pushed up the slope it stops, then slides back more slowly than it went up.
+    up = -G0 * (math.sin(al) + mu_k * math.cos(al))
+    t1 = 6 / -up
+    x1 = 6 * t1 + up * t1 * t1 / 2
+    f = _found(_phys("line", dict(g=(G0, "m/s2"), inc=(30, "deg"), mu=(0.2, ""), x0=(0, "m"), v0=(6, "m/s"),
+                                  t=(repr(t1 + 1.0), "s")), fr))
+    assert abs(f["tstop"] - t1) < 1e-9 and abs(f["xstop"] - x1) < 1e-9
+    assert abs(f["x"] - (x1 + a / 2)) < 1e-9 and abs(f["v"] - a) < 1e-9 and abs(f["a"] - a) < 1e-9
+    # An applied force against friction.
+    push = _found(_phys("line", preset="push"))
+    assert abs(push["a"] - (120 / 20 - 0.4 * G0)) < 1e-9 and abs(push["x"] - (6 - 0.4 * G0) * 4.5) < 1e-9
+    weak = _found(_phys("line", dict(m=(20, "kg"), g=(G0, "m/s2"), inc=(0, "deg"), mu=(0.4, ""), F=(50, "N"),
+                                     x0=(0, "m"), v0=(0, "m/s"), t=(3, "s")), dict(fr, force="on")))
+    assert abs(weak["x"]) < 1e-9 and abs(weak["v"]) < 1e-9          # 50 N cannot overcome 78 N of friction
+    # A mass on a spring with dry friction loses 2 mu m g / k of amplitude each half swing, then sticks.
+    d = 0.1 * 1 * G0 / 100
+    osc = dict(m=(1, "kg"), g=(G0, "m/s2"), inc=(0, "deg"), mu=(0.1, ""), k=(100, "N/m"), x0=(0.1, "m"), v0=(0, "m/s"))
+    half = _found(_phys("line", dict(osc, t=(repr(math.pi / 10), "s")), dict(fr, spring="on")))
+    assert abs(half["x"] + (0.1 - 2 * d)) < 2e-4
+    rest = _found(_phys("line", dict(osc, t=(3, "s")), dict(fr, spring="on")))
+    assert abs(rest["x"] + (0.1 - 10 * d)) < 5e-4 and abs(rest["v"]) < 1e-9
+    # Friction needs a surface.
+    r = _phys("line", dict(mu=(0.3, ""), x0=(0, "m"), v0=(5, "m/s")), {"friction": "on"})
+    assert not r["ok"] and "needs a surface" in r["error"]
+    r = _phys("line", dict(rhof=(1000, "kg/m3"), x0=(0, "m"), v0=(5, "m/s")), {"buoyancy": "on"})
+    assert not r["ok"] and "vertical" in r["error"]
+
+
+def test_physics_cyclotron_and_crossed_fields():
+    e, me = 1.602176634e-19, 9.109e-31
+    f = _found(_phys("plane", preset="electron"))
+    assert abs(f["rc"] - me * 1e6 / (e * 1e-3)) < 1e-9 and abs(f["Tc"] - 2 * math.pi * me / (e * 1e-3)) < 1e-15
+    assert abs(f["wc"] - e * 1e-3 / me) < 1.0
+    # The field from the measured radius, and the speed from the radius and field.
+    b = _found(_phys("plane", dict(m=("9.109*10^-31", "kg"), q=(-1, "e"), v0=(1000, "km/s"), rc=(5, "mm")),
+                     {"bfield": "on"}))
+    assert abs(b["wc"] - 1e6 / 5e-3) < 1e-3 and abs(b["Tc"] - 2 * math.pi * 5e-3 / 1e6) < 1e-15
+    # After half a turn the particle is a diameter away, moving the opposite way at the same speed.
+    V, _ = _all_values("plane", dict(m=(2, "kg"), q=(0.5, "C"), B=(3, "T"), v0=(4, "m/s"), ang=(0, "deg"),
+                                     x0=(0, "m"), y0=(0, "m"), t=(repr(math.pi / 0.75), "s")), {"bfield": "on"})
+    assert abs(V["x"]) < 1e-9 and abs(V["y"] + 2 * V["rc"]) < 1e-9 and abs(V["vx"] + 4) < 1e-9 and abs(V["spd"] - 4) < 1e-9
+    # Crossed fields: with v = E/B across both, the forces cancel and the path is straight.
+    V, _ = _all_values("plane", dict(m=(1, "kg"), q=(2, "C"), Ex=(0, "V/m"), Ey=(6, "V/m"), B=(3, "T"), v0=(2, "m/s"),
+                                     ang=(0, "deg"), x0=(0, "m"), y0=(0, "m"), t=(5, "s")),
+                       {"efield": "on", "bfield": "on"})
+    assert abs(V["x"] - 10) < 1e-9 and abs(V["y"]) < 1e-9 and abs(V["vy"]) < 1e-9
+    plates = _found(_phys("plane", preset="plates"))
+    assert abs(plates["y"] - 0.5 * (e * 5000 / me) * (2e-9) ** 2) < 1e-9
+
+
+def test_physics_orbits_follow_kepler():
+    gm = 3.986e14
+    sat = _found(_phys("plane", preset="satellite"))
+    assert abs(sat["Torb"] - 2 * math.pi * math.sqrt(6.771e6 ** 3 / gm)) < 2.0 and sat["ecc"] < 1e-3
+    assert abs(sat["vesc"] - math.sqrt(2 * gm / 6.771e6)) < 1e-6
+    assert abs(sat["Mc"] - gm / 6.6743e-11) < 1e12
+    tr = _found(_phys("plane", preset="transfer"))
+    r0, v0 = 6.678e6, 10250.0
+    a = 1 / (2 / r0 - v0 * v0 / gm)                      # vis-viva
+    assert abs(tr["rp"] - r0) < 1e-3 and abs(tr["ra"] - (2 * a - r0)) < 1e-2
+    assert abs(tr["ecc"] - (2 * a - r0 - r0) / (2 * a)) < 1e-9
+    assert abs(tr["Torb"] - 2 * math.pi * math.sqrt(a ** 3 / gm)) < 1e-6
+    # A circular orbit comes back to where it started after one period, and is opposite after half.
+    circ = dict(GM=(398600, "km3/s2"), x0=(7000, "km"), y0=(0, "km"), v0=(repr(math.sqrt(gm / 7e6)), "m/s"),
+                ang=(90, "deg"))
+    period = 2 * math.pi * math.sqrt(7e6 ** 3 / gm)
+    V, _ = _all_values("plane", dict(circ, t=(repr(period / 2), "s")), {"central": "on"})
+    assert abs(V["x"] + 7e6) < 50 and abs(V["y"]) < 50 and abs(V["Torb"] - period) < 1e-6 and V["ecc"] < 1e-6
+    # Above escape speed there is no period or far point, and that is reported rather than invented.
+    r = _phys("plane", dict(GM=(398600, "km3/s2"), x0=(7000, "km"), y0=(0, "km"), v0=(12, "km/s"), ang=(90, "deg")),
+              {"central": "on"})
     f = _found(r)
-    roots = sorted([(20 - math.sqrt(400 - 2 * 9.81 * 15)) / 9.81, (20 + math.sqrt(400 - 2 * 9.81 * 15)) / 9.81])
+    assert f["ecc"] > 1 and "Torb" not in f and "ra" not in f and f["eorb"] > 0
+    assert "never reached" in _missing(r)["Torb"] or "no value fits" in _missing(r)["Torb"]
+
+
+def test_physics_pendulum_small_and_large_angles():
+    base = dict(L=(1, "m"), g=(G0, "m/s2"), om0=(0, "rad/s"))
+    t0 = 2 * math.pi * math.sqrt(1 / G0)
+    small = _found(_phys("rotation", dict(base, th0=(2, "deg")), {"gravity": "point", "large": "on"}))
+    assert abs(small["T0"] - t0) < 1e-9 and abs(small["Tex"] / t0 - 1) < 1e-4
+    # The series T = T0 (1 + th^2/16 + 11 th^4/3072 + ...) for larger swings.
+    for deg in (20, 45, 90):
+        th = math.radians(deg)
+        f = _found(_phys("rotation", dict(base, th0=(deg, "deg")), {"gravity": "point", "large": "on"}))
+        series = 1 + th ** 2 / 16 + 11 * th ** 4 / 3072 + 173 * th ** 6 / 737280
+        assert abs(f["Tex"] / t0 - series) < 2e-3 * (deg / 90) ** 6 + 1e-6, deg
+    # Released from 90 degrees, a quarter of the exact period later it is passing the bottom.
+    f = _found(_phys("rotation", dict(base, th0=(90, "deg")), {"gravity": "point", "large": "on"}))
+    q = _found(_phys("rotation", dict(base, th0=(90, "deg"), t=(repr(f["Tex"] / 4), "s")),
+                     {"gravity": "point", "large": "on"}))
+    assert abs(q["th"]) < 1e-5 and abs(q["om"] + math.sqrt(2 * G0)) < 1e-5
+    # The small-angle model keeps simple harmonic motion whatever the angle.
+    s = _found(_phys("rotation", dict(base, th0=(90, "deg"), t=(repr(t0 / 4), "s")), {"gravity": "point"}))
+    assert abs(s["th"]) < 1e-9
+    # A physical pendulum and a torsion pendulum.
+    stick = _found(_phys("rotation", preset="stick"))
+    assert abs(stick["T0"] - 2 * math.pi * math.sqrt(0.05 / (0.15 * G0 * 0.5))) < 1e-9
+    tor = _found(_phys("rotation", preset="torsion"))
+    assert abs(tor["kappa"] - 0.002 * (2 * math.pi / 1.5) ** 2) < 1e-12
+    # Constant torque on a flywheel; braking to rest over 50 turns.
+    fly = _found(_phys("rotation", preset="flywheel"))
+    assert abs(fly["alpha"] - 4) < 1e-12 and abs(fly["om"] - 40) < 1e-9 and abs(fly["th"] - 200) < 1e-9
+    brake = _found(_phys("rotation", preset="brake"))
+    assert abs(brake["alpha"] + 120 ** 2 / (2 * 100 * math.pi)) < 1e-9 and abs(brake["t"] - 2 * 100 * math.pi / 120) < 1e-9
+
+
+def test_physics_first_order_change_with_every_label():
+    kinds = {"temp": "K", "amt": "", "conc": "mol/L", "volt": "V", "cur": "A", "spd": "m/s", "pop": "", "gen": ""}
+    assert {o["id"] for o in next(e for e in _CAT["change"]["effects"] if e["id"] == "what")["options"]} == set(kinds)
+    for kind, unit in kinds.items():
+        # Decay: two readings give the rate, the half-life and a later value.
+        eff = {"what": kind, "law": "decay"}
+        f = _found(_phys("change", {"y0_" + kind: (80, unit), "t": (3, "s"), "y_" + kind: (50, unit), "t2": (7, "s")}, eff))
+        k = math.log(80 / 50) / 3
+        assert abs(f["k"] - k) < 1e-12 and abs(f["th"] - math.log(2) / k) < 1e-9, kind
+        assert abs(f["y2_" + kind] - 80 * math.exp(-7 * k)) < 1e-9 and abs(f["frac"] - 50 / 80) < 1e-12
+        # Approach to a level: the time to get within a given distance of it.
+        eff = {"what": kind, "law": "level"}
+        f = _found(_phys("change", {"y0_" + kind: (300, unit), "yinf_" + kind: (350, unit), "tau": (4, "s"),
+                                    "y_" + kind: (340, unit)}, eff))
+        assert abs(f["t"] - 4 * math.log(5)) < 1e-9 and abs(f["k"] - 0.25) < 1e-12, kind
+        # Growth: the doubling time fixes the rate.
+        eff = {"what": kind, "law": "growth"}
+        f = _found(_phys("change", {"y0_" + kind: (3, unit), "th": (5, "s"), "t": (15, "s")}, eff))
+        assert abs(f["y_" + kind] - 24) < 1e-9, kind
+    # A constant source: the balance point, and the approach to it.
+    f = _found(_phys("change", preset="chip"))
+    assert abs(f["yf_temp"] - (298.15 + 3 / 0.05)) < 1e-9
+    assert abs(f["y_temp"] - (f["yf_temp"] - 60 * math.exp(-0.05 * 30))) < 1e-9
+    # Only the rows of the chosen quantity exist.
+    r = _phys("change", {"y0_temp": (90, "C"), "y0_amt": (5, ""), "k": (0.1, "1/s"), "t": (2, "s")},
+              {"what": "temp", "law": "decay"})
+    rows = [row[0] for row in r["methods"][0]["steps"][-2]["table"]["rows"]]
+    assert "y_temp" in _found(r) and "y_amt" not in _found(r) and not any("mount" in x for x in rows)
+
+
+def test_physics_rlc_regimes_match_closed_forms():
+    L, C, v0 = 1e-3, 1e-6, 10.0
+    w0 = 1 / math.sqrt(L * C)
+    base = dict(L=(1, "mH"), C=(1, "uF"), vc0=(10, "V"), i0=(0, "A"))
+    t = 3e-4
+    # No resistance: it oscillates for ever at w0.
+    f = _found(_phys("circuit", dict(base, t=(repr(t), "s")), {"ind": "on", "cap": "on"}))
+    assert abs(f["w0"] - w0) < 1e-6 and abs(f["vc"] - v0 * math.cos(w0 * t)) < 1e-9
+    assert abs(f["i"] + v0 * C * w0 * math.sin(w0 * t)) < 1e-9
+    assert abs(f["ec"] + f["el"] - 0.5 * C * v0 * v0) < 1e-12          # energy only moves between C and L
+    for R in (10.0, 2 * math.sqrt(L / C), 300.0):
+        f = _found(_phys("circuit", dict(base, R=(repr(R), "ohm"), t=(repr(t), "s")), _RLC))
+        a = R / (2 * L)
+        zeta = a / w0
+        assert abs(f["zeta"] - zeta) < 1e-9
+        if zeta < 1 - 1e-9:
+            wd = math.sqrt(w0 * w0 - a * a)
+            want = v0 * math.exp(-a * t) * (math.cos(wd * t) + a / wd * math.sin(wd * t))
+            assert abs(f["wd"] - wd) < 1e-6 and abs(f["qfac"] - 1 / (2 * zeta)) < 1e-9
+        elif zeta > 1 + 1e-9:
+            s1, s2 = -a + math.sqrt(a * a - w0 * w0), -a - math.sqrt(a * a - w0 * w0)
+            want = v0 * (s2 * math.exp(s1 * t) - s1 * math.exp(s2 * t)) / (s2 - s1)
+            assert "wd" not in f
+        else:
+            want = v0 * (1 + a * t) * math.exp(-a * t)
+        assert abs(f["vc"] - want) < 1e-7, (R, f["vc"], want)
+    # A battery charges the capacitor to V whatever the damping, and the final energy is CV^2/2.
+    f = _found(_phys("circuit", dict(R=(20, "ohm"), L=(1, "mH"), C=(1, "uF"), V=(9, "V"), vc0=(0, "V"), i0=(0, "A"),
+                                     t=(1, "s")), dict(_RLC, source="battery")))
+    assert abs(f["vc"] - 9) < 1e-9 and abs(f["vf"] - 9) < 1e-12 and abs(f["ef"] - 0.5 * 1e-6 * 81) < 1e-15
+    # Driven at resonance the reactances cancel: the current amplitude is V/R and in phase.
+    f0 = w0 / (2 * math.pi)
+    f = _found(_phys("circuit", dict(R=(20, "ohm"), L=(1, "mH"), C=(1, "uF"), vamp=(3, "V"), freq=(repr(f0), "Hz")),
+                     dict(_RLC, source="ac")))
+    assert abs(f["zimp"] - 20) < 1e-6 and abs(f["iac"] - 0.15) < 1e-9 and abs(f["phi"]) < 1e-6
+    # Off resonance: |Z| = sqrt(R^2 + (wL - 1/wC)^2).
+    f = _found(_phys("circuit", dict(R=(20, "ohm"), L=(1, "mH"), C=(1, "uF"), vamp=(3, "V"), freq=(8000, "Hz")),
+                     dict(_RLC, source="ac")))
+    w = 2 * math.pi * 8000
+    assert abs(f["zimp"] - math.hypot(20, w * L - 1 / (w * C))) < 1e-9
+    # RC and RL are the same system with one component fewer.
+    rc = _found(_phys("circuit", dict(R=(1, "kohm"), C=(1, "uF"), vc0=(5, "V"), t=(1, "ms")), _RC))
+    assert abs(rc["vc"] - 5 / math.e) < 1e-12 and abs(rc["tau"] - 1e-3) < 1e-15
+    rl = _found(_phys("circuit", dict(R=(10, "ohm"), L=(50, "mH"), V=(5, "V"), i0=(0, "A"), t=(5, "ms")),
+                      dict(_RL, source="battery")))
+    assert abs(rl["i"] - 0.5 * (1 - 1 / math.e)) < 1e-12
+    # A circuit needs enough parts to have a differential equation.
+    r = _phys("circuit", dict(R=(10, "ohm")), {"res": "on"})
+    assert not r["ok"] and "Switch on" in r["error"]
+
+
+def test_physics_several_solutions_are_reported():
+    r = _phys("line", dict(g=(G0, "m/s2"), v0=(20, "m/s"), x0=(0, "m"), x=(15, "m")), _VERT)
+    f = _found(r)
+    roots = sorted([(20 - math.sqrt(400 - 2 * G0 * 15)) / G0, (20 + math.sqrt(400 - 2 * G0 * 15)) / G0])
     assert abs(f["t"] - roots[0]) < 1e-9
-    step_text = next(s["text"] for s in r["methods"][0]["steps"] if s["title"] == "Find the time")
-    assert "Other values that also fit" in step_text and "3.087" in step_text
-    jump = _phys("projectile", preset="jump")
+    # The ball passes that height twice: going up (the answer carried on with) and coming down.
+    step_text = next(s["text"] for s in r["methods"][0]["steps"] if s["title"] == "Find the velocity at that time")
+    assert "Other values that also fit" in step_text and "-10.28" in step_text
+    jump = _phys("plane", preset="jump")
     angle = _found(jump)["ang"]
     assert abs(math.degrees(angle) - 30.21) < 0.01
-    text = next(s["text"] for s in jump["methods"][0]["steps"] if s["title"] == "Find the launch angle")
+    text = next(s["text"] for s in jump["methods"][0]["steps"] if s["title"].startswith("Find the initial direction"))
     assert "59.79" in text
     # With the velocity at that moment also known, the matching time is chosen.
-    later = _phys("falling", dict(g=(9.81, "m/s2"), v0=(20, "m/s"), y0=(0, "m"), y=(15, "m"),
-                                  v=(repr(20 - 9.81 * roots[1]), "m/s")), {})
+    later = _phys("line", dict(g=(G0, "m/s2"), v0=(20, "m/s"), x0=(0, "m"), x=(15, "m"),
+                               v=(repr(20 - G0 * roots[1]), "m/s")), _VERT)
     assert abs(_found(later)["t"] - roots[1]) < 1e-6
+    # A target met just before and just after a turning point: both times are found, close together.
+    ring = dict(R=(10, "ohm"), L=(1, "mH"), C=(1, "uF"), vc0=(10, "V"), i0=(0, "A"))
+    V, _ = _all_values("circuit", dict(ring, t=(0.0002, "s")), _RLC)
+    back = _phys("circuit", dict(ring, vc=(repr(V["vc"]), "V"), i=(repr(V["i"]), "A")), _RLC)
+    assert abs(_found(back)["t"] - 0.0002) < 1e-9
 
 
 def test_physics_reports_what_cannot_be_found():
-    r = _phys("falling", dict(g=(9.81, "m/s2"), m=(80, "kg"), v0=(0, "m/s"), y0=(100, "m"),
-                              rho=(1.225, "kg/m3"), cd=(1.0, "")), {"drag": "quadratic"})
-    assert r["ok"] is False or r["physics"]["missing"]
-    r = _phys("spring", dict(m=(2, "kg"), x0=(0.1, "m"), v0=(0, "m/s"), T=(1.5, "s")), {"damping": "on"})
+    r = _phys("line", dict(g=(G0, "m/s2"), m=(80, "kg"), v0=(0, "m/s"), x0=(100, "m"),
+                           rho=(1.225, "kg/m3"), cd=(1.0, "")), dict(_VERT, drag="quadratic"))
+    assert "c" in _missing(r) and "vt" in _missing(r) and "terminal speed" in _missing(r)["c"]
+    eff = {"spring": "on", "drag": "linear"}
+    r = _phys("line", dict(m=(2, "kg"), x0=(0.1, "m"), v0=(0, "m/s"), T=(1.5, "s")), eff)
     assert r["ok"]
-    missing = {m["id"]: m["reason"] for m in r["physics"]["missing"]}
-    assert "k" in _found(r) and "c" in missing
-    assert "damping ratio" in missing["c"] or "decay time" in missing["c"]
+    missing = _missing(r)
+    assert "k" in _found(r) and "b" in missing
+    assert "damping ratio" in missing["b"] or "decay time" in missing["b"]
     assert "t" not in missing           # nothing about the moment was entered, so it is not asked for
-    r = _phys("spring", dict(m=(2, "kg"), x0=(0.1, "m"), v0=(0, "m/s"), T=(1.5, "s"), t=(1, "s")), {"damping": "on"})
-    missing = {m["id"]: m["reason"] for m in r["physics"]["missing"]}
-    assert "x" in missing and "damping coefficient" in missing["x"]
-    nothing = _phys("rc", dict(vc0=(0, "V")), {"source": "battery"})
+    r = _phys("line", dict(m=(2, "kg"), x0=(0.1, "m"), v0=(0, "m/s"), T=(1.5, "s"), t=(1, "s")), eff)
+    assert "x" in _missing(r) and "damping" in _missing(r)["x"]
+    # Plain kinematics with too little to go on says what else would settle it.
+    r = _phys("line", dict(v0=(3, "m/s"), t=(2, "s")), {})
+    assert not r["ok"] and "cannot be found" in r["error"] and "also enter" in r["error"]
+    nothing = _phys("circuit", dict(vc0=(0, "V")), dict(_RC, source="battery"))
     assert not nothing["ok"] and "cannot be found" in nothing["error"]
-    empty = _phys("rc", dict(vc0=("", "V")), {"source": "battery"})
+    empty = _phys("circuit", dict(vc0=("", "V")), dict(_RC, source="battery"))
     assert not empty["ok"] and "Enter the values you know" in empty["error"]
-    never = _phys("falling", dict(g=(9.81, "m/s2"), v0=(5, "m/s"), y0=(0, "m"), y=(15, "m")), {})
-    assert "never reached" in {m["id"]: m["reason"] for m in never["physics"]["missing"]}["t"]
-    above = _phys("rc", dict(R=(1, "kohm"), C=(1, "uF"), V=(5, "V"), vc0=(0, "V"), vc=(6, "V")), {"source": "battery"})
-    assert "never reached" in {m["id"]: m["reason"] for m in above["physics"]["missing"]}["t"]
+    never = _phys("line", dict(g=(G0, "m/s2"), v0=(5, "m/s"), x0=(0, "m"), x=(15, "m")), _VERT)
+    assert "never reached" in _missing(never)["t"]
+    above = _phys("circuit", dict(R=(1, "kohm"), C=(1, "uF"), V=(5, "V"), vc0=(0, "V"), vc=(6, "V")),
+                  dict(_RC, source="battery"))
+    assert "never reached" in _missing(above)["t"]
+    # Extras that simply do not happen (it never comes back to x = 0, it never stops) are not listed as problems.
+    r = _phys("line", preset="accel")
+    assert not r["physics"]["missing"]
 
 
 def test_physics_inconsistent_and_impossible_values():
-    r = _phys("falling", dict(g=(9.81, "m/s2"), v0=(0, "m/s"), y0=(10, "m"), tg=(1, "s")), {})
+    r = _phys("line", dict(g=(G0, "m/s2"), v0=(0, "m/s"), x0=(10, "m"), tg=(1, "s")), _VERT)
     assert not r["ok"] and "do not fit together" in r["error"] and "30%" in r["error"]
-    assert "time to reach the ground" in r["error"]
-    r = _phys("rc", dict(R=(1, "kohm"), C=(1, "uF"), tau=(5, "ms"), vc0=(0, "V")), {"source": "discharge"})
+    assert "time to reach x = 0" in r["error"]
+    r = _phys("line", dict(acc=(2, "m/s2"), x0=(0, "m"), v0=(0, "m/s"), t=(3, "s"), v=(9, "m/s")), {})
+    assert not r["ok"] and "do not fit together" in r["error"]
+    r = _phys("circuit", dict(R=(1, "kohm"), C=(1, "uF"), tau=(5, "ms"), vc0=(0, "V")), _RC)
     assert not r["ok"] and "do not fit together" in r["error"]
     # Values that agree to within rounding are accepted.
-    ok = _phys("rc", dict(R=(1, "kohm"), C=(1, "uF"), tau=(1.004, "ms"), vc0=(5, "V"), t=(1, "ms")), {"source": "discharge"})
+    ok = _phys("circuit", dict(R=(1, "kohm"), C=(1, "uF"), tau=(1.004, "ms"), vc0=(5, "V"), t=(1, "ms")), _RC)
     assert ok["ok"] and "vc" in _found(ok)
-    assert "Mass must be greater than zero" in _phys("falling", dict(g=(9.81, "m/s2"), m=(-2, "kg")), {})["error"]
-    assert "outside the range" in _phys("projectile", dict(v0=(10, "m/s"), ang=(120, "deg"), g=(9.81, "m/s2")), {})["error"]
-    assert "must be a number" in _phys("rc", dict(R=("abc", "ohm")), {"source": "battery"})["error"]
-    assert "cannot be used" in _phys("rc", dict(R=(1, "furlong")), {"source": "battery"})["error"]
+    assert "Mass must be greater than zero" in _phys("line", dict(g=(G0, "m/s2"), m=(-2, "kg")), _VERT)["error"]
+    assert "outside the range" in _phys("line", dict(g=(G0, "m/s2"), inc=(120, "deg")), {"gravity": "surface"})["error"]
+    assert "must be a number" in _phys("circuit", dict(R=("abc", "ohm")), _RC)["error"]
+    assert "cannot be used" in _phys("circuit", dict(R=(1, "furlong")), _RC)["error"]
     assert "Unknown physics model" in json.loads(physics("warp", ""))["error"]
-    assert "could not be read" in json.loads(physics("rc", "{oops"))["error"]
+    assert "could not be read" in json.loads(physics("circuit", "{oops"))["error"]
 
 
 def test_physics_units():
@@ -3017,89 +3414,157 @@ def test_physics_units():
             assert abs(punits.from_si(punits.to_si(3.7, quantity, choice["id"]), quantity, choice["id"]) - 3.7) < 1e-9
     assert abs(punits.to_si(100, "temperature", "C") - 373.15) < 1e-9
     assert abs(punits.to_si(212, "temperature", "F") - 373.15) < 1e-9
-    a = _found(_phys("falling", dict(m=(80, "kg"), g=(9.81, "m/s2"), v0=(0, "m/s"), y0=(4000, "m"),
-                                     c=(0.3, "kg/m")), {"drag": "quadratic"}))
-    b = _found(_phys("falling", dict(m=(176.36981, "lb"), g=(1.0003262, "g0"), v0=(0, "mph"), y0=(4, "km"),
-                                     c=(300, "g/m")), {"drag": "quadratic"}))
+    assert abs(punits.to_si(1, "charge", "e") - 1.602176634e-19) < 1e-30
+    assert abs(punits.to_si(398600, "grav_parameter", "km3/s2") - 3.986e14) < 1
+    eff = dict(_VERT, drag="quadratic")
+    a = _found(_phys("line", dict(m=(80, "kg"), g=(G0, "m/s2"), v0=(0, "m/s"), x0=(4000, "m"), c=(0.3, "kg/m")), eff))
+    b = _found(_phys("line", dict(m=(176.36981, "lb"), g=(1.0003262, "g0"), v0=(0, "mph"), x0=(4, "km"),
+                                  c=(300, "g/m")), eff))
     for key in ("vt", "tg", "vi"):
         assert abs(a[key] - b[key]) < 1e-5 * a[key], key
-    c1 = _found(_phys("cooling", dict(T0=(90, "C"), Ta=(22, "C"), k=(0.05, "1/min"), T=(60, "C")), {}))
-    c2 = _found(_phys("cooling", dict(T0=(194, "F"), Ta=(295.15, "K"), k=(3, "1/h"), T=(140, "F")), {}))
+    lvl = {"what": "temp", "law": "level"}
+    c1 = _found(_phys("change", dict(y0_temp=(90, "C"), yinf_temp=(22, "C"), k=(0.05, "1/min"), y_temp=(60, "C")), lvl))
+    c2 = _found(_phys("change", dict(y0_temp=(194, "F"), yinf_temp=(295.15, "K"), k=(3, "1/h"), y_temp=(140, "F")), lvl))
     assert abs(c1["t"] - c2["t"]) < 1e-6 * c1["t"]
     # A found value is shown in the unit chosen for its (blank) row.
-    r = _phys("rc", dict(R=(2, "kohm"), C=(120, "uF"), V=(300, "V"), vc0=(0, "V"), vc=(285, "V"), t=("", "ms")),
-              {"source": "battery"})
+    r = _phys("circuit", dict(R=(2, "kohm"), C=(120, "uF"), V=(300, "V"), vc0=(0, "V"), vc=(285, "V"), t=("", "ms")),
+              dict(_RC, source="battery"))
     shown = {f["id"]: f["text"] for f in r["physics"]["found"]}
     assert shown["t"].startswith("719 ms")
+    # Scientific notation typed the way people write it.
+    r = _phys("plane", dict(Mc=("5.972*10^24", "kg"), x0=(6771, "km"), y0=(0, "km"), v0=(7.673, "km/s"),
+                            ang=(90, "deg")), {"central": "on"})
+    assert abs(_found(r)["GM"] - 6.6743e-11 * 5.972e24) < 1e6 and abs(_found(r)["Torb"] / 60 - 92.4) < 0.1
 
 
 def test_physics_shooting_for_a_parameter():
     # The drag coefficient from the speed 10 s into a skydive (no closed form to rearrange).
-    base, _ = _all_values("falling", dict(m=(80, "kg"), g=(9.81, "m/s2"), v0=(0, "m/s"), y0=(4000, "m"),
-                                          c=(0.34, "kg/m"), t=(10, "s")), {"drag": "quadratic"})
-    r = _phys("falling", dict(m=(80, "kg"), g=(9.81, "m/s2"), v0=(0, "m/s"), y0=(4000, "m"), t=(10, "s"),
-                              v=(repr(base["v"]), "m/s")), {"drag": "quadratic"})
+    eff = dict(_VERT, drag="quadratic")
+    base, _ = _all_values("line", dict(m=(80, "kg"), g=(G0, "m/s2"), v0=(0, "m/s"), x0=(4000, "m"),
+                                       c=(0.34, "kg/m"), t=(10, "s")), eff)
+    r = _phys("line", dict(m=(80, "kg"), g=(G0, "m/s2"), v0=(0, "m/s"), x0=(4000, "m"), t=(10, "s"),
+                           v=(repr(base["v"]), "m/s")), eff)
     assert abs(_found(r)["c"] - 0.34) < 1e-6
     # A projectile's drag coefficient from where it is after one second (numerical trajectory).
-    V, _ = _all_values(*PHYSICS_CASES[8][:1], PHYSICS_CASES[8][2], PHYSICS_CASES[8][1])
-    rest = {k: V[k] for k in ("v0", "ang", "y0", "g", "m", "t", "x")}
-    r = _phys("projectile", _si("projectile", rest), {"drag": "quadratic"})
+    model, eff, knowns = _case("plane", {"gravity": "on", "drag": "quadratic"})
+    V, _ = _all_values(model, knowns, eff)
+    rest = {k: V[k] for k in ("v0", "ang", "x0", "y0", "g", "m", "t", "x")}
+    r = _phys("plane", _si("plane", rest), eff)
     assert abs(_found(r)["c"] - 0.0012) < 1e-6
-    # The cooling constant from one reading, then the time of a second reading.
-    r = _phys("cooling", preset="coffee")
-    assert [f["id"] for f in r["physics"]["found"]][:1] == ["k"] and "t2" in _found(r)
+    # The rate constant from one reading, then the time of a second reading.
+    r = _phys("change", preset="coffee")
+    assert "k" in _found(r) and "t2" in _found(r)
 
 
-def test_physics_effects_change_the_answer_and_are_compared():
-    plain = _found(_phys("falling", dict(m=(80, "kg"), g=(9.81, "m/s2"), v0=(0, "m/s"), y0=(4000, "m")), {}))
-    r = _phys("falling", preset="skydiver")
+def test_physics_losses_change_the_answer_and_are_compared():
+    plain = _found(_phys("line", dict(m=(80, "kg"), g=(G0, "m/s2"), v0=(0, "m/s"), x0=(4000, "m")), _VERT))
+    r = _phys("line", preset="skydiver")
     drag = _found(r)
     assert drag["tg"] > 2 * plain["tg"] and drag["vi"] < plain["vi"] / 4
     compare = next(s for s in r["methods"][0]["steps"] if s["title"] == "Compare with the idealised model")
-    assert any("Time to reach the ground" in row[0] for row in compare["table"]["rows"])
+    assert any("Time to reach x = 0" in row[0] for row in compare["table"]["rows"])
     assert len(r["physics"]["ideal"]) > 50 and r["physics"]["ideal_label"]
+    # With nothing to switch off there is nothing to compare with.
+    r = _phys("line", preset="thrown")
+    assert not any(s["title"].startswith("Compare") for s in r["methods"][0]["steps"]) and not r["physics"]["ideal"]
     # A vanishing effect reproduces the ideal answer.
-    ideal = _found(_phys("falling", dict(g=(9.81, "m/s2"), v0=(0, "m/s"), y0=(100, "m")), {}))
+    ideal = _found(_phys("line", dict(g=(G0, "m/s2"), v0=(0, "m/s"), x0=(100, "m")), _VERT))
     for values, effects in ((dict(b=(1e-9, "kg/s")), {"drag": "linear"}), (dict(c=(1e-12, "kg/m")), {"drag": "quadratic"})):
-        values.update(m=(80, "kg"), g=(9.81, "m/s2"), v0=(0, "m/s"), y0=(100, "m"))
-        tiny = _found(_phys("falling", values, effects))
+        values.update(m=(80, "kg"), g=(G0, "m/s2"), v0=(0, "m/s"), x0=(100, "m"))
+        tiny = _found(_phys("line", values, dict(_VERT, **effects)))
         assert abs(tiny["tg"] - ideal["tg"]) < 1e-6 and abs(tiny["vi"] - ideal["vi"]) < 1e-5, effects
+    # Energy bookkeeping: what drag removes is the drop in mechanical energy.
+    ball = _found(_phys("line", preset="ball"))
+    assert abs(ball["elost"] - (ball["E"] - ball["em"])) < 1e-9 and ball["elost"] > 0
+    assert abs(ball["em"] - (ball["ek"] + 0.145 * G0 * ball["x"])) < 1e-9
     # Variables of a switched-off effect do not exist: a value sent for them is ignored.
-    r = _phys("spring", dict(m=(1, "kg"), k=(100, "N/m"), x0=(0.1, "m"), v0=(0, "m/s"), c=(5, "kg/s")), {})
-    assert "zeta" not in _found(r) and all(row[1] != "c" for row in r["methods"][0]["steps"][-2]["table"]["rows"])
+    r = _phys("line", dict(m=(1, "kg"), k=(100, "N/m"), x0=(0.1, "m"), v0=(0, "m/s"), b=(5, "kg/s")), {"spring": "on"})
+    assert "zeta" not in _found(r) and all(row[1] != "b" for row in r["methods"][0]["steps"][-2]["table"]["rows"])
 
 
 def test_physics_catalog_and_equation_preview():
     cat = json.loads(physics_catalog())
-    assert [s["id"] for s in cat["scenarios"]] == ["falling", "projectile", "spring", "pendulum", "cooling",
-                                                   "decay", "rc", "rl"]
-    assert len(cat["upcoming"]) >= 5
+    assert [s["id"] for s in cat["scenarios"]] == ["line", "plane", "rotation", "change", "circuit"]
+    assert cat["upcoming"] and not any("RLC" in x or "Orbit" in x or "Incline" in x for x in cat["upcoming"])
     for sc in cat["scenarios"]:
         ids = {f["id"] for f in sc["fields"]}
+        eids = {e["id"]: [o["id"] for o in e["options"]] for e in sc["effects"]}
         groups = {f["group"] for f in sc["fields"]}
         assert groups <= {"setup", "initial", "effect", "moment", "moment2", "derived"} and "moment" in groups
         assert all(f["units"] and f["label"] and f["symbol"] for f in sc["fields"])
-        assert "questions" not in sc and len(sc["presets"]) >= 4
+        assert "questions" not in sc and len(sc["description"]) < 90
         effect_fields = set()
         for e in sc["effects"]:
             assert e["default"] in [o["id"] for o in e["options"]]
             assert all(fid in ids for o in e["options"] for fid in o["fields"])
             effect_fields |= {fid for o in e["options"] for fid in o["fields"]}
         assert effect_fields == {f["id"] for f in sc["fields"] if f["group"] == "effect"}
-    assert json.loads(preview('{"effects": {"drag": "quadratic", "buoyancy": "on"}}', "physics:falling"))["latex"] == \
-        "m\\,\\frac{dv}{dt} = -m\\,g + \\rho_f V g - c\\,v\\,|v|,\\qquad \\frac{dy}{dt} = v"
-    assert "c\\,x'" in json.loads(preview('{"effects": {"damping": "on"}}', "physics:spring"))["latex"]
-    assert "R_L" in json.loads(preview('{"effects": {"leak": "on"}}', "physics:rc"))["latex"]
-    assert "\\sin\\theta" in json.loads(preview('{"effects": {"large": "on"}}', "physics:pendulum"))["latex"]
+        for f in sc["fields"]:
+            for cond in f["show"] + f["hide"]:
+                assert cond["effect"] in eids and set(cond["in"]) <= set(eids[cond["effect"]]), (sc["id"], f["id"])
+        for p in sc["presets"]:
+            assert all(k in eids and v in eids[k] for k, v in p["effects"].items()), (sc["id"], p["id"])
+    assert json.loads(preview('{"effects": {"gravity": "vertical", "drag": "quadratic", "buoyancy": "on"}}',
+                              "physics:line"))["latex"] == \
+        "m\\,\\frac{dv}{dt} = -m g + \\rho_f V g - c\\,v\\,|v|,\\qquad \\frac{dx}{dt} = v"
+    assert json.loads(preview("{}", "physics:line"))["latex"] == "x'' = a,\\qquad x' = v"
+    assert "k\\,x" in json.loads(preview('{"effects": {"spring": "on"}}', "physics:line"))["latex"]
+    assert "q B" in json.loads(preview('{"effects": {"bfield": "on"}}', "physics:plane"))["latex"]
+    assert "r^3" in json.loads(preview('{"effects": {"central": "on"}}', "physics:plane"))["latex"]
+    assert "\\sin\\theta" in json.loads(preview('{"effects": {"large": "on"}}', "physics:rotation"))["latex"]
+    assert "R_L" in json.loads(preview('{"effects": {"res": "on", "cap": "on", "leak": "on"}}', "physics:circuit"))["latex"]
+    lc = json.loads(preview('{"effects": {"ind": "on", "cap": "on"}}', "physics:circuit"))["latex"]
+    assert "L" in lc and "R" not in lc.replace("\\frac", "")
+    assert json.loads(preview("{}", "physics:circuit"))["ok"]
+
+
+def test_physics_rows_follow_the_switches():
+    from deengine.scenarios.common import active_ids
+    line = _CAT["line"]
+    base = {e["id"]: e["default"] for e in line["effects"]}
+    blank = active_ids(line, base)
+    assert blank[:3] == ["m", "acc", "x0"] and "a" not in blank and "g" not in blank and "k" not in blank
+    assert {"t", "x", "v", "tg", "tstop", "dstop"} <= set(blank)
+    drag = active_ids(line, dict(base, gravity="vertical", drag="quadratic"))
+    assert "acc" not in drag and {"g", "c", "rho", "cd", "area", "vt", "a"} <= set(drag) and "inc" not in drag
+    spring = active_ids(line, dict(base, spring="on", drag="linear"))
+    assert {"k", "w0", "T", "f", "zeta", "tau", "b"} <= set(spring) and "tg" not in spring and "acc" not in spring
+    assert "zeta" not in active_ids(line, dict(base, spring="on"))
+    circuit = _CAT["circuit"]
+    cbase = {e["id"]: e["default"] for e in circuit["effects"]}
+    rc = active_ids(circuit, dict(cbase, res="on", cap="on"))
+    assert {"R", "C", "vc0", "tau"} <= set(rc) and not {"L", "i0", "w0", "vl"} & set(rc)
+    rlc = active_ids(circuit, dict(cbase, res="on", cap="on", ind="on"))
+    assert {"R", "L", "C", "vc0", "i0", "w0", "zeta", "qfac"} <= set(rlc)
+    change = _CAT["change"]
+    temp = active_ids(change, {"what": "temp", "law": "level", "source": "off"})
+    assert {"y0_temp", "yinf_temp", "y_temp", "k", "tau", "th"} <= set(temp)
+    assert not any(x.endswith(("_amt", "_volt", "_gen")) for x in temp) and "s_temp" not in temp
+    assert "yinf_temp" not in active_ids(change, {"what": "temp", "law": "decay", "source": "off"})
+
+
+def test_physics_old_model_ids_still_open_something():
+    """History entries and links written for the earlier situation-based models must not crash."""
+    for old, new in (("falling", "line"), ("spring", "line"), ("projectile", "plane"), ("pendulum", "rotation"),
+                     ("cooling", "change"), ("decay", "change"), ("rc", "circuit"), ("rl", "circuit")):
+        assert json.loads(preview("{}", "physics:" + old))["latex"], old
+        r = json.loads(physics(old, json.dumps({"values": {"zzz": {"value": "1", "unit": "m"}}, "effects": {"drag": "x"}})))
+        assert r["ok"] is False and "Enter the values you know" in r["error"]
+        assert json.loads(physics(old, ""))["ok"] is False
+    # Examples that kept their names still solve through the old id.
+    assert abs(_found(_phys("falling", preset="skydiver"))["vt"] - 50.62) < 0.005
+    assert abs(_found(_phys("rc", preset="flash"))["t"] - 0.719) < 0.0005
 
 
 def test_physics_solves_quickly():
     import time
-    for model, preset_id in (("projectile", "golf"), ("projectile", "javelin"), ("falling", "skydiver"),
-                             ("pendulum", "swing"), ("projectile", "hoop")):
-        start = time.time()
-        assert _phys(model, preset=preset_id)["ok"]
-        assert time.time() - start < 2.0, (model, preset_id)
+    for model, spec in _CAT.items():
+        for p in spec["presets"]:
+            start = time.time()
+            assert _phys(model, preset=p["id"])["ok"]
+            assert time.time() - start < 2.0, (model, p["id"])
+
+
 
 
 def test_export_fixtures():
@@ -3170,14 +3635,18 @@ def test_export_fixtures():
     with open(os.path.join(out, "physics_catalog.json"), "w") as fh:
         fh.write(physics_catalog())
     for name, model, preset_id in (
-            ("physics_falling.json", "falling", "skydiver"), ("physics_spring.json", "spring", "car"),
-            ("physics_rc.json", "rc", "flash"), ("physics_projectile.json", "projectile", "hoop"),
-            ("physics_cooling.json", "cooling", "coffee"), ("physics_decay.json", "decay", "carbon"),
-            ("physics_rl.json", "rl", "relay"), ("physics_pendulum.json", "pendulum", "swing")):
+            ("physics_line.json", "line", "skydiver"), ("physics_plane.json", "plane", "hoop"),
+            ("physics_rotation.json", "rotation", "swing"), ("physics_change.json", "change", "coffee"),
+            ("physics_circuit.json", "circuit", "flash"), ("physics_kinematics.json", "line", "accel"),
+            ("physics_orbit.json", "plane", "satellite"), ("physics_rlc.json", "circuit", "ring")):
         with open(os.path.join(out, name), "w") as fh:
             fh.write(physics(model, json.dumps({"preset": preset_id})))
+    for stale in ("falling", "spring", "rc", "projectile", "cooling", "decay", "rl", "pendulum"):
+        path = os.path.join(out, "physics_%s.json" % stale)
+        if os.path.exists(path):
+            os.remove(path)
     with open(os.path.join(out, "physics_missing.json"), "w") as fh:
-        fh.write(physics("spring", json.dumps({"values": {
+        fh.write(physics("line", json.dumps({"values": {
             "m": {"value": "2", "unit": "kg"}, "x0": {"value": "0.1", "unit": "m"},
             "v0": {"value": "0", "unit": "m/s"}, "T": {"value": "1.5", "unit": "s"},
-            "t": {"value": "1", "unit": "s"}}, "effects": {"damping": "on"}})))
+            "t": {"value": "1", "unit": "s"}}, "effects": {"spring": "on", "drag": "linear"}})))

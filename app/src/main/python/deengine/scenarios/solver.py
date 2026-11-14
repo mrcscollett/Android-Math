@@ -32,8 +32,9 @@ class Rel:
     that go through the solution of the differential equation.
     """
 
-    def __init__(self, rid, name, tex, variables, fn, forms=None, traj=False):
+    def __init__(self, rid, name, tex, variables, fn, forms=None, traj=False, late=False):
         self.id, self.name, self.tex = rid, name, tex
+        self.late = late          # an extra (energies and the like): worked out after everything else
         self.vars = tuple(variables)
         self.fn = fn
         self.forms = forms or {}
@@ -86,6 +87,8 @@ def solve_one(rel, uid, v, var, horizon, deadline):
         return _safe(rel, trial)
 
     roots = []
+    hits = set()           # grid points that fit as they stand (no bisection needed)
+    trail = []             # (x, residual) along the grid, None where the relation is undefined
     flat = valid = 0
     prev_x = prev_r = None
     for x in _grid(var, horizon, rel.traj and var["quantity"] != "time"):
@@ -94,12 +97,14 @@ def solve_one(rel, uid, v, var, horizon, deadline):
         r = g(x)
         if r is None:
             prev_x = prev_r = None
+            trail.append(None)
             continue
         valid += 1
         if abs(r) < 1e-5:
             flat += 1          # if most points are like this, the relation ignores this variable
         if abs(r) < 1e-12:
             roots.append(x)
+            hits.add(x)
         elif prev_r is not None and prev_r != 0.0 and (r > 0) != (prev_r > 0):
             lo, hi = prev_x, x
             flo = prev_r
@@ -122,13 +127,74 @@ def solve_one(rel, uid, v, var, horizon, deadline):
             if ok and check is not None and abs(check) < 1e-6:
                 roots.append(root)
         prev_x, prev_r = x, r
-    if flat > 5 and flat >= 0.6 * valid:
+        trail.append((x, r))
+    if var["quantity"] == "time":
+        roots += _dips(g, trail)       # an oscillation can meet a target twice between grid points
+    ends = [p for p in trail if p is not None]
+    if flat > 5 and flat >= 0.6 * valid and abs(ends[0][1]) < 1e-5 and abs(ends[-1][1]) < 1e-5:
         return []          # the relation holds whatever this variable is: it does not determine it
+    if 0.0 in roots:
+        # Zero itself fits, so the specks either side of it are rounding, not further answers.
+        roots = [x for x in roots if x == 0.0 or x not in hits]
     out = []
     for x in roots:
         if not any(abs(x - y) <= 1e-9 * max(abs(x), abs(y), 1e-300) for y in out):
             out.append(x)
     return out
+
+
+def _bisect(g, lo, flo, hi):
+    for _ in range(80):
+        mid = (lo + hi) / 2
+        fm = g(mid)
+        if fm is None:
+            return None
+        if (fm > 0) == (flo > 0):
+            lo, flo = mid, fm
+        else:
+            hi = mid
+        if hi - lo <= 1e-13 * max(abs(hi), abs(lo), 1e-300):
+            break
+    root = (lo + hi) / 2
+    check = g(root)
+    return root if check is not None and abs(check) < 1e-6 else None
+
+
+def _dips(g, trail):
+    """Roots the grid stepped over: the residual dips towards zero and comes back between points.
+
+    That is two roots close together (a target met just before and just after a turning point).
+    """
+    found = []
+    for a, b, c in zip(trail, trail[1:], trail[2:]):
+        if a is None or b is None or c is None:
+            continue
+        (xa, ra), (xb, rb), (xc, rc) = a, b, c
+        if ra == 0 or rb == 0 or rc == 0 or not ((ra > 0) == (rb > 0) == (rc > 0)):
+            continue
+        if not (abs(rb) <= abs(ra) and abs(rb) <= abs(rc)) or abs(rb) > 0.05:
+            continue
+        lo, hi = xa, xc
+        best_x, best_r = xb, rb
+        for _ in range(40):               # ternary search for where |residual| is smallest
+            m1, m2 = lo + (hi - lo) / 3, hi - (hi - lo) / 3
+            r1, r2 = g(m1), g(m2)
+            if r1 is None or r2 is None:
+                break
+            for x, r in ((m1, r1), (m2, r2)):
+                if (r > 0) != (rb > 0) or abs(r) < abs(best_r):
+                    best_x, best_r = x, r
+            if (best_r > 0) != (rb > 0):
+                break
+            if abs(r1) < abs(r2):
+                hi = m2
+            else:
+                lo = m1
+        if (best_r > 0) != (rb > 0):
+            for root in (_bisect(g, xa, ra, best_x), _bisect(g, xc, rc, best_x)):
+                if root is not None:
+                    found.append(root)
+    return found
 
 
 def _unknowns(rel, v):
@@ -154,19 +220,23 @@ def run(model, effects, known, variables, deadline):
     rels = model.relations(effects)
     rels = [r for r in rels if all(x in variables for x in r.vars)]
     found = []
+    dead = set()       # (relation, unknown) pairs already tried without a root: their inputs cannot change
     while True:
         horizon = model.horizon(effects, v)
         progress = False
-        for traj in (False, True):
+        for stage in (0, 1, 2):
             for rel in rels:
-                if rel.traj != traj:
+                if (2 if rel.late else (1 if rel.traj else 0)) != stage:
                     continue
                 unk = _unknowns(rel, v)
                 if len(unk) != 1:
                     continue
                 uid = unk[0]
+                if (rel.id, uid) in dead:
+                    continue
                 roots = solve_one(rel, uid, v, variables[uid], horizon, deadline)
                 if not roots:
+                    dead.add((rel.id, uid))
                     continue
                 roots = _agreeing(roots, uid, rel, rels, v) or roots
                 value = _pick(roots, variables[uid])
@@ -201,14 +271,19 @@ def _agreeing(roots, uid, rel, rels, v):
         trial[uid] = x
         residuals = [_safe(r, trial) for r in others]
         if all(res is not None and abs(res) <= TOLERANCE for res in residuals):
-            keep.append(x)
-    return keep
+            keep.append((max(abs(res) for res in residuals), x))
+    if not keep:
+        return []
+    # Roots that fit the other relations exactly beat ones that only fit within the rounding allowance.
+    best = min(score for score, _x in keep)
+    return [x for score, x in keep if score <= max(10 * best, 1e-7)]
 
 
 def _solve_pair(model, effects, rels, v, variables, deadline):
     """Two relations sharing the same two unknowns, solved together."""
     horizon = model.horizon(effects, v)
-    candidates = [r for r in rels if 1 <= len(_unknowns(r, v)) <= 2]
+    # A relation with a single unknown was already tried on its own; pairing it cannot help.
+    candidates = [r for r in rels if len(_unknowns(r, v)) == 2]
     for i, r1 in enumerate(candidates):
         for r2 in candidates[i + 1:]:
             both = sorted(set(_unknowns(r1, v)) | set(_unknowns(r2, v)))
@@ -312,6 +387,8 @@ def _missing(rels, v, variables):
             if uid not in rel.vars:
                 continue
             others = [x for x in _unknowns(rel, v) if x != uid]
+            if any(variables[x].get("optional") for x in others):
+                continue           # an optional extra is not something to ask for
             if not others:
                 blocked = True     # one unknown, yet no value satisfied the relation
                 continue
@@ -333,7 +410,7 @@ def _missing(rels, v, variables):
                 parts.append(" and ".join(variables[x]["label"].lower() for x in group))
             reason = "also enter " + ", or ".join(parts)
         else:
-            reason = "nothing entered determines it"
+            continue               # it only feeds optional extras
         out.append({"id": uid, "label": var["label"], "reason": reason})
     return out
 
@@ -398,7 +475,7 @@ def solve(model, inp):
     ideal_rows = _ideal_comparison(model, inp, known, v, found, deadline)
     if ideal_rows:
         s = step("Compare with the idealised model",
-                 "The same known values with every optional effect switched off.")
+                 "The same known values with the friction, resistance and other losses switched off.")
         s["table"] = {"headers": ["\\text{quantity}", "\\text{with the effects}", "\\text{without}"],
                       "rows": ideal_rows}
         steps.append(s)
@@ -453,8 +530,11 @@ def solve(model, inp):
 
 def _ideal_comparison(model, inp, known, v, found, deadline):
     spec = model.MODEL
-    off = {e["id"]: e["default"] for e in spec["effects"]}
-    if off == inp.effects or not found:
+    if hasattr(model, "baseline"):
+        off = model.baseline(inp.effects)      # the same system without its dissipative effects
+    else:
+        off = {e["id"]: e["default"] for e in spec["effects"]}
+    if not off or off == inp.effects or not found:
         return []
     from .common import active_ids
     ids = active_ids(spec, off)
@@ -522,5 +602,5 @@ def _graph(model, effects, v):
             "curve_label": g["label"], "ideal": ideal,
             "ideal_label": g.get("ideal_label", "Without the optional effects") if ideal else "",
             "marker": g.get("marker"), "t_max": t_max,
-            "animation": {"kind": model.MODEL.get("animation", "capacitor"), "points": curve,
+            "animation": {"kind": g.get("animation") or model.MODEL.get("animation", "capacitor"), "points": curve,
                           "min": lo, "max": hi, "label": g["y_label"]}}

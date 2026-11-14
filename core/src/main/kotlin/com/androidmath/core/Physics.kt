@@ -11,7 +11,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
 
-/** The physics models the engine offers; the app builds its forms from this. */
+/** The physics systems the engine offers; the app builds its forms from this. */
 @Serializable
 data class PhysicsCatalog(
     val ok: Boolean = true,
@@ -19,7 +19,39 @@ data class PhysicsCatalog(
     /** Names of scenarios that are planned but not built yet. */
     val upcoming: List<String> = emptyList(),
 ) {
-    fun scenario(id: String): Scenario? = scenarios.firstOrNull { it.id == id }
+    /** The system with this id. Ids of the earlier situation-based models open the system that replaced them. */
+    fun scenario(id: String): Scenario? {
+        val current = LEGACY_IDS[id] ?: id
+        return scenarios.firstOrNull { it.id == current }
+    }
+
+    /** The switches that turn the general system into the old model [id] (empty for a current id). */
+    fun legacyEffects(id: String): Map<String, String> = LEGACY_EFFECTS[id] ?: emptyMap()
+
+    companion object {
+        /** Old model id to the general system that now covers it (saved history, old links). */
+        val LEGACY_IDS: Map<String, String> = mapOf(
+            "falling" to "line",
+            "spring" to "line",
+            "projectile" to "plane",
+            "pendulum" to "rotation",
+            "cooling" to "change",
+            "decay" to "change",
+            "rc" to "circuit",
+            "rl" to "circuit",
+        )
+
+        private val LEGACY_EFFECTS: Map<String, Map<String, String>> = mapOf(
+            "falling" to mapOf("gravity" to "vertical"),
+            "spring" to mapOf("spring" to "on"),
+            "projectile" to mapOf("gravity" to "on"),
+            "pendulum" to mapOf("gravity" to "point"),
+            "cooling" to mapOf("what" to "temp", "law" to "level"),
+            "decay" to mapOf("what" to "amt", "law" to "decay"),
+            "rc" to mapOf("res" to "on", "cap" to "on"),
+            "rl" to mapOf("res" to "on", "ind" to "on"),
+        )
+    }
 }
 
 @Serializable
@@ -40,15 +72,24 @@ data class Scenario(
     /**
      * The variables that exist for the chosen effects, in the model's order:
      * every variable that does not belong to an effect, plus the variables of
-     * each effect option that is switched on.
+     * each effect option that is switched on. A variable can also carry its
+     * own conditions on the switches ([PhysicsField.show], [PhysicsField.hide]).
      */
     fun visibleFields(chosen: Map<String, String>): List<PhysicsField> {
+        val current = HashMap<String, String>()
         val wanted = HashSet<String>()
         for (e in effects) {
-            val option = e.options.firstOrNull { it.id == (chosen[e.id] ?: e.default) }
+            val optionId = chosen[e.id] ?: e.default
+            current[e.id] = optionId
+            val option = e.options.firstOrNull { it.id == optionId }
             if (option != null) wanted.addAll(option.fields)
         }
-        return fields.filter { it.group != "effect" || it.id in wanted }
+        return fields.filter { f ->
+            val listed = f.group != "effect" || f.id in wanted
+            val shown = f.show.all { it.holds(current) }
+            val hidden = f.hide.isNotEmpty() && f.hide.all { it.holds(current) }
+            listed && shown && !hidden
+        }
     }
 
     /** [visibleFields] split into titled sections, in the order the form shows them. */
@@ -93,11 +134,24 @@ data class PhysicsField(
     /** "setup", "initial", "effect" (exists only with its effect), "moment", "moment2" or "derived". */
     val group: String = "setup",
     val hint: String = "",
+    /** The row exists only while every one of these conditions on the switches holds. */
+    val show: List<FieldCondition> = emptyList(),
+    /** The row is removed while every one of these conditions holds (ignored when empty). */
+    val hide: List<FieldCondition> = emptyList(),
 ) {
     val initialValue: String get() = initial?.getOrNull(0) ?: ""
     val initialUnit: String get() = initial?.getOrNull(1) ?: (units.firstOrNull()?.id ?: "")
 
     fun unitLabel(unitId: String): String = units.firstOrNull { it.id == unitId }?.label ?: unitId
+}
+
+/** A condition on one switch: its chosen option is one of [options]. */
+@Serializable
+data class FieldCondition(
+    val effect: String,
+    @SerialName("in") val options: List<String> = emptyList(),
+) {
+    fun holds(chosen: Map<String, String>): Boolean = chosen[effect] in options
 }
 
 @Serializable

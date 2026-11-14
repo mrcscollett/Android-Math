@@ -3,7 +3,8 @@ from . import units
 
 
 def field(fid, label, symbol, quantity, default=None, group="setup", positive=False,
-          nonnegative=False, hint="", bounds=None, typical=1.0, optional=False):
+          nonnegative=False, hint="", bounds=None, typical=1.0, optional=False,
+          show=None, hide=None):
     """A variable row. `default` is (value text, unit id) or (None, unit id) for a blank box.
 
     group: "setup" (parameters), "initial" (initial conditions), "moment" (the
@@ -11,11 +12,17 @@ def field(fid, label, symbol, quantity, default=None, group="setup", positive=Fa
     (shown only with its effect). `bounds` (SI) and `typical` (an SI magnitude)
     guide the numerical search when this variable is the unknown. An `optional`
     variable is left out of the "could not be found" list.
+
+    `show` and `hide` make a row depend on the switches: each is a list of
+    (effect id, [option ids]) conditions. The row exists only while every
+    `show` condition holds, and is removed while every `hide` condition holds.
     """
     return {"id": fid, "label": label, "symbol": symbol, "quantity": quantity,
             "units": units.choices(quantity), "default": list(default) if default else None,
             "group": group, "positive": positive, "nonnegative": nonnegative, "hint": hint,
-            "bounds": list(bounds) if bounds else None, "typical": typical, "optional": optional}
+            "bounds": list(bounds) if bounds else None, "typical": typical, "optional": optional,
+            "show": [{"effect": c[0], "in": list(c[1])} for c in (show or [])],
+            "hide": [{"effect": c[0], "in": list(c[1])} for c in (hide or [])]}
 
 
 def switch(eid, label, description, fields):
@@ -34,7 +41,7 @@ def choice(eid, label, description, options, default):
 
 
 def preset(pid, label, description, values, effects=None):
-    """A real situation: the values known in it, {field: (value text, unit id)}.
+    """An optional example: a real situation and the values known in it, {field: (value text, unit id)}.
 
     Fields it does not mention are left blank, i.e. they are what gets found.
     """

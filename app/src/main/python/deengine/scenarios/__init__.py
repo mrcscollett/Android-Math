@@ -1,6 +1,7 @@
-"""Physics models: real situations governed by differential equations.
+"""Physics: general systems governed by differential equations.
 
-Each model module declares its variables, optional effects and presets in a
+Each system is one equation of motion with optional forces or components as
+switches, not a particular situation. Each system module declares its variables, optional effects and presets in a
 MODEL dict and provides relations(effects), derivation(effects),
 equation(effects), horizon(effects, v), trajectory(effects, v) and
 graph(effects, v). The user fills in the variables they know; solver.py
@@ -9,15 +10,18 @@ finds the rest from the relations.
 import json
 
 from ..parsing import InputError
-from . import cooling, decay, falling, pendulum, projectile, rc, rl, solver, spring
+from . import change, circuit, line, plane, rotation, solver
 from .common import Inputs
 
-MODELS = [falling, projectile, spring, pendulum, cooling, decay, rc, rl]
-UPCOMING = ["Rocket", "Inclines and braking", "Rotation", "Orbits", "Draining tank",
-            "RLC circuit", "Charged particle in a field", "Electromagnetic induction"]
+MODELS = [line, plane, rotation, change, circuit]
+UPCOMING = ["Rocket (changing mass)", "Draining tank", "Coupled oscillators", "Electromagnetic induction"]
+# Ids of the earlier situation-based models, so saved history and old links still open something.
+LEGACY = {"falling": "line", "spring": "line", "projectile": "plane", "pendulum": "rotation",
+          "cooling": "change", "decay": "change", "rc": "circuit", "rl": "circuit"}
 
 
 def _module(model_id):
+    model_id = LEGACY.get(model_id, model_id)
     for mod in MODELS:
         if mod.MODEL["id"] == model_id:
             return mod

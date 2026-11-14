@@ -24,7 +24,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -73,18 +73,19 @@ import com.androidmath.core.PhysicsAnimation
 import com.androidmath.core.PhysicsData
 import com.androidmath.core.PhysicsEffect
 import com.androidmath.core.PhysicsField
+import com.androidmath.core.PhysicsPreset
 import com.androidmath.core.Plot
 import com.androidmath.core.Samples
 import com.androidmath.core.Viewport
 import kotlinx.coroutines.delay
 
 /**
- * The form for a physics model: a list of its variables, each with a value box
- * and a unit picker. The user fills in what they know; every box left empty is
- * an unknown, and Solve works out each one the known values determine.
- * Everything shown comes from the engine's catalog: the variables and their
- * sections, the optional effects (each adds its own variables), the unit
- * choices and the real examples.
+ * The form for a physics system: its switches (forces, components) and a list
+ * of its variables, each with a value box and a unit picker. It opens blank.
+ * The user fills in what they know; every box left empty is an unknown, and
+ * Solve works out each one the known values determine. Everything shown comes
+ * from the engine's catalog: the variables and their sections, the switches
+ * (each adds its own variables), the unit choices and the optional examples.
  */
 @Composable
 fun PhysicsInputScreen(model: SolverViewModel) {
@@ -116,28 +117,32 @@ fun PhysicsInputScreen(model: SolverViewModel) {
                 if (scenario == null) {
                     Text("Starting the solver…", modifier = Modifier.padding(top = 24.dp))
                 } else {
-                    Text(
-                        scenario.description,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    var showExamples by remember { mutableStateOf(false) }
+                    if (showExamples) {
+                        ExamplesDialog(
+                            presets = scenario.presets,
+                            onPick = { preset ->
+                                model.applyPreset(preset)
+                                showExamples = false
+                            },
+                            onDismiss = { showExamples = false },
+                        )
+                    }
 
                     Text(
-                        "Fill in the values you know and leave the rest empty. " +
+                        "Switch on what acts, fill in the values you know and leave the rest empty. " +
                             "Solve finds every empty one that your values determine.",
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.padding(top = 8.dp),
                     )
 
-                    SectionLabel("Fill in a real example")
-                    FlowRow(
+                    // Nothing is filled in until an example is picked; the form itself starts blank.
+                    Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        for (preset in scenario.presets) {
-                            AssistChip(onClick = { model.applyPreset(preset) }, label = { Text(preset.label) })
-                        }
-                        AssistChip(onClick = { model.clearPhysics() }, label = { Text("Clear all") })
+                        TextButton(onClick = { showExamples = true }) { Text("Examples") }
+                        TextButton(onClick = { model.clearPhysics() }) { Text("Clear all") }
                     }
 
                     SectionLabel("The equation (" + scenario.law + ")")
@@ -152,7 +157,7 @@ fun PhysicsInputScreen(model: SolverViewModel) {
                     }
 
                     if (scenario.effects.isNotEmpty()) {
-                        SectionLabel("Optional effects")
+                        SectionLabel("Switch on what applies")
                         for (effect in scenario.effects) {
                             EffectRow(effect, model.physicsEffects[effect.id] ?: effect.default) { option ->
                                 model.setPhysicsEffect(effect.id, option)
@@ -200,6 +205,43 @@ fun PhysicsInputScreen(model: SolverViewModel) {
             }
         }
     }
+}
+
+/** The optional real-world examples of a system. Picking one sets its switches and known values. */
+@Composable
+private fun ExamplesDialog(
+    presets: List<PhysicsPreset>,
+    onPick: (PhysicsPreset) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Examples") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                for (preset in presets) {
+                    TextButton(onClick = { onPick(preset) }, modifier = Modifier.fillMaxWidth()) {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Text(preset.label, style = MaterialTheme.typography.titleSmall)
+                            if (preset.description.isNotBlank()) {
+                                Text(
+                                    preset.description,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
 }
 
 @Composable

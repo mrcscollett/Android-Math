@@ -17,14 +17,14 @@ class Inputs:
         for p in scenario["presets"]:
             if p["id"] == raw.get("preset"):
                 preset = p
-        if preset is None and "values" not in raw:
-            preset = scenario["presets"][0]
         given = raw.get("values")
         if given is not None:
             source = given          # the form was filled in: a blank box means unknown
-        else:
-            # A preset: its values only. Everything else is blank, i.e. to be found.
+        elif preset is not None:
+            # An example: its values only. Everything else is blank, i.e. to be found.
             source = {k: {"value": v[0], "unit": v[1]} for k, v in preset["values"].items()}
+        else:
+            source = {}             # nothing entered and no example chosen
         base_effects = dict(preset.get("effects", {})) if preset else {}
         self.effects = {}
         chosen = raw.get("effects") if raw.get("effects") is not None else base_effects
@@ -79,13 +79,32 @@ class Inputs:
 
 
 def active_ids(scenario, effects):
-    """Ids of the variables that exist for the chosen effects, in the model's order."""
+    """Ids of the variables that exist for the chosen effects, in the model's order.
+
+    A variable of group "effect" exists when the chosen option of some effect
+    lists it. Any variable can also carry `show` / `hide` conditions on the
+    switches (see spec.field).
+    """
+    chosen = {e["id"]: effects.get(e["id"], e["default"]) for e in scenario["effects"]}
     wanted = set(f["id"] for f in scenario["fields"] if f["group"] != "effect")
     for e in scenario["effects"]:
         for o in e["options"]:
-            if o["id"] == effects.get(e["id"], e["default"]):
+            if o["id"] == chosen[e["id"]]:
                 wanted.update(o["fields"])
-    return [f["id"] for f in scenario["fields"] if f["id"] in wanted]
+
+    def holds(c):
+        return chosen.get(c["effect"]) in c["in"]
+
+    out = []
+    for f in scenario["fields"]:
+        if f["id"] not in wanted:
+            continue
+        if not all(holds(c) for c in f.get("show") or []):
+            continue
+        if f.get("hide") and all(holds(c) for c in f["hide"]):
+            continue
+        out.append(f["id"])
+    return out
 
 
 def knowns_step(inp, ids):
