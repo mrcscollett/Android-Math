@@ -148,7 +148,6 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
     val physicsValues = mutableStateMapOf<String, String>()
     val physicsUnits = mutableStateMapOf<String, String>()
     val physicsEffects = mutableStateMapOf<String, String>()
-        private set
     /** A physics problem asked for before the catalog had loaded (a launch intent). */
     private var pendingPhysics: Triple<String, Map<String, String>, Int>? = null
 
