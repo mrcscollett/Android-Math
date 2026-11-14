@@ -466,4 +466,50 @@ class PdeTest {
         val flat = Plot.heatMap(Expr.parseOrNull("3")!!, 0.0, 1.0, 0.0, 1.0, 1, 1, 3.0, 3.0)
         assertEquals(0f, flat[0], 0f)
     }
+
+    @Test fun parsesSecondPdeFixtures() {
+        val moving = EngineJson.solveResult(fixture("pde_characteristics.json"))
+        assertEquals("characteristics", moving.pde)
+        val u = Expr.parseOrNull(moving.applicableMethods.single().plot!!.particularExpr)!!
+        // e^(-(x - 2t)^2) with y standing for t: the peak has moved to x = 2 at t = 1.
+        assertEquals(1.0, u.eval(2.0, 1.0, 0.0), 1e-12)
+        assertTrue(moving.domain!!.tMax > 0.0)
+        assertNotNull(Expr.parseOrNull(moving.initialExpr))
+
+        val type = EngineJson.solveResult(fixture("pde_classify.json"))
+        assertEquals("classify", type.pde)
+        assertNull(type.applicableMethods.single().plot!!.particularExpr)
+
+        val grid = EngineJson.solveResult(fixture("pde_fd.json"))
+        assertEquals(listOf("ftcs", "cn"), grid.applicableMethods.map { it.id })
+        val plot = grid.applicableMethods[0].plot!!
+        assertEquals(11, plot.levels.size)
+        assertEquals(0, plot.levelNear(0.004))
+        assertEquals(3, plot.levelNear(0.061))
+        assertEquals(10, plot.levelNear(5.0))
+        val points = plot.levels[1].pointArray()
+        assertEquals(10, points.size)
+        assertEquals(0.25, points[2], 1e-12)
+        val exact = Expr.parseOrNull(plot.particularExpr)!!
+        assertEquals(exact.eval(0.5, 0.2, 0.0), plot.levels[10].pointArray()[5], 0.02)
+
+        val disk = EngineJson.solveResult(fixture("pde_disk.json"))
+        assertEquals("disk", disk.domain!!.mask)
+        assertTrue(disk.surface)
+        val harmonic = Expr.parseOrNull(disk.applicableMethods.single().plot!!.particularExpr)!!
+        assertEquals(0.5, harmonic.eval(0.0, 0.0, 0.0), 1e-9)
+        assertTrue(harmonic.eval(0.0, 0.8, 0.0) > 0.8)
+        assertTrue(harmonic.eval(0.0, -0.8, 0.0) < 0.2)
+    }
+
+    @Test fun heatMapDiskMask() {
+        val one = Expr.parseOrNull("1")!!
+        val map = Plot.heatMap(one, -1.0, 1.0, -1.0, 1.0, 4, 4, 0.0, 1.0, disk = true)
+        // Corner cells lie outside the unit circle; the four centre cells are inside.
+        assertTrue(map[0].isNaN() && map[3].isNaN() && map[12].isNaN() && map[15].isNaN())
+        assertEquals(1f, map[5], 0f)
+        assertEquals(1f, map[10], 0f)
+        assertEquals(12, map.count { !it.isNaN() })
+        assertEquals(16, Plot.heatMap(one, -1.0, 1.0, -1.0, 1.0, 4, 4, 0.0, 1.0).count { !it.isNaN() })
+    }
 }

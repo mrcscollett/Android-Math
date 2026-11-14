@@ -34,7 +34,10 @@ What it covers so far:
 - **Partial differential equations**: the heat equation on a rod (five kinds
   of boundary conditions), the wave equation on a string with fixed ends
   (series and d'Alembert's formula) and Laplace's equation on a rectangle, by
-  separation of variables, with an animated graph or a heat map.
+  separation of variables, with an animated graph or a heat map. Also
+  Laplace's equation on a disk, the method of characteristics for first-order
+  equations, classification of second-order equations, and the explicit and
+  Crank-Nicolson finite-difference schemes for the heat equation.
 - **Numerical methods**: Euler, improved Euler, midpoint, RK4,
   Adams-Bashforth and adaptive RK45, with step tables and the error against
   the exact solution when one is known.

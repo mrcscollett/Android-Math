@@ -155,8 +155,26 @@ expect wave 'text="Wave equation"'
 expect wave 'text="Play"'
 expect wave 'Initial profile'
 
-open laplace "sin(pi*x)" 1 1 0 'text="Steps"' "--es mode laplace --es bc top"
-expect laplace 'Solve in the other direction'
+# Laplace's equation has its own mode name: plain "laplace" is the transform section.
+open laplace_eq "sin(pi*x)" 1 1 0 'text="Steps"' "--es mode laplace_eq --es bc top"
+expect laplace_eq 'Solve in the other direction'
+
+# x0 and y0 carry the coefficients a and b here.
+open characteristics "e^(-x^2)" 2 1 0 'text="Steps"' "--es mode characteristics"
+expect characteristics 'text="Characteristics"'
+expect characteristics 'Solve for the characteristic curves'
+
+# A, B, C = 1, 0, -4 (the wave equation); the equation extra is not used.
+open classify "0" 1 0 0 'text="Steps"' "--es mode classify --es t1 '-4'"
+expect classify 'text="Classification"'
+expect classify 'Compute the discriminant'
+
+open fd "sin(pi*x)" 1 1 1 'text="Graph"' "--es mode fd --es t1 4 --es t2 0.02 --es steps 10"
+expect fd 'text="Finite differences"'
+expect fd 'Grid values'
+
+open disk "cos(t)" 2 1 1 'text="Graph"' "--es mode disk"
+expect disk 'The disk has radius'
 
 # The problems opened above must now be listed on the home screen.
 adb shell am force-stop $PKG

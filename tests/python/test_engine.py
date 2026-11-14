@@ -1381,7 +1381,7 @@ def test_laplace_harmonic_and_bounded(f, a, b, side):
     (("wave", "x", "", "1", "0", "", "", ""), "wave speed c must be a positive"),
     (("laplace", "x", "", "1", "1", "up", "", ""), "which side"),
     (("laplace", "y", "", "1", "1", "top", "", ""), "Unknown symbol"),
-    (("foo", "x", "", "1", "1", "", "", ""), "heat, wave or Laplace"),
+    (("foo", "x", "", "1", "1", "", "", ""), "kind of problem"),
 ])
 def test_pde_errors(args, fragment):
     r = json.loads(pde(*args))
@@ -1398,6 +1398,195 @@ def test_pde_preview_and_speed():
     _pde("wave", "x(1-x)", "x", "1", "1", "", "", "")
     _pde("laplace", "x(2-x)", "", "2", "1", "bottom", "", "")
     assert time.time() - start < 6
+
+
+# ---- second PDE patch: characteristics, classification, finite differences, disk ----
+
+def _pde_err(*args):
+    return json.loads(pde(*args))
+
+
+def _uxt(expr_text):
+    """u(x, t) from a plot expression (y stands for t)."""
+    return sp.lambdify((X, Y), sp.sympify(expr_text, locals={"x": X, "y": Y}), "math")
+
+
+@pytest.mark.parametrize("a,b,c,d,f,exact", [
+    ("2", "1", "", "", "e^(-x^2)", lambda x, t: math.exp(-(x - 2 * t) ** 2)),
+    ("1", "1", "-1", "", "sin(x)", lambda x, t: math.exp(-t) * math.sin(x - t)),
+    ("x", "1", "", "", "1/(1+x^2)", lambda x, t: 1 / (1 + (x * math.exp(-t)) ** 2)),
+    ("t", "1", "", "", "cos(x)", lambda x, t: math.cos(x - t * t / 2)),
+    ("3", "2", "", "1", "x", lambda x, t: (x - 1.5 * t) + t / 2),
+    ("-1", "1", "2", "", "1/(1+x^2)", lambda x, t: math.exp(2 * t) / (1 + (x + t) ** 2)),
+])
+def test_characteristics_match_exact_solution_and_pde(a, b, c, d, f, exact):
+    r = _pde("characteristics", f, "", a, b, "", c, d)
+    assert r["ok"], r.get("error")
+    assert r["pde"] == "characteristics"
+    m = r["methods"][0]
+    assert m["verified"] is True, m["verify_note"]
+    u = _uxt(m["plot"]["particular_expr"])
+    coef = [sp.lambdify((X, sp.Symbol("t")), sp.sympify(text or "0", locals={"x": X}), "math")
+            for text in (a, b, c, d)]
+    h = 1e-5
+    for x, t in ((0.3, 0.2), (-1.1, 0.7), (0.9, 1.3)):
+        assert abs(u(x, t) - exact(x, t)) < 1e-9
+        ux = (u(x + h, t) - u(x - h, t)) / (2 * h)
+        ut = (u(x, t + h) - u(x, t - h)) / (2 * h)
+        av, bv, cv, dv = (fn(x, t) for fn in coef)
+        assert abs(av * ux + bv * ut - cv * u(x, t) - dv) < 1e-6
+    assert abs(u(0.4, 0.0) - exact(0.4, 0.0)) < 1e-12
+    titles = [s["title"] for s in m["steps"]]
+    assert titles[:2] == ["Write the characteristic equations", "Solve for the characteristic curves"]
+    assert r["domain"]["t_max"] > 0 and r["initial_expr"]
+
+
+def test_characteristics_general_solution_and_errors():
+    r = _pde("characteristics", "", "", "3", "1", "", "", "")
+    m = r["methods"][0]
+    assert "F{\\left(- 3 t + x \\right)}" in m["particular_latex"]
+    assert m["verified"] is True and m["plot"]["particular_expr"] is None
+    degenerate = _pde("characteristics", "x", "", "x", "t", "", "1", "")
+    assert "t F{\\left(\\frac{x}{t} \\right)}" in degenerate["methods"][0]["particular_latex"]
+    assert "vanishes at t = 0" in degenerate["summary"]
+    assert "cannot be 0" in _pde_err("characteristics", "x", "", "1", "0", "", "", "")["error"]
+    assert "coefficient a" in _pde_err("characteristics", "x", "", "", "1", "", "", "")["error"]
+    assert "Unknown symbol" in _pde_err("characteristics", "x", "", "y", "1", "", "", "")["error"]
+
+
+@pytest.mark.parametrize("A,B,C,kind,model", [
+    ("1", "0", "-4", "hyperbolic", "wave"),
+    ("1", "0", "0", "parabolic", "heat"),
+    ("1", "0", "1", "elliptic", "Laplace"),
+    ("1", "2", "1", "parabolic", "heat"),
+    ("1", "4", "1", "hyperbolic", "wave"),
+    ("2", "1", "3", "elliptic", "Laplace"),
+    ("0", "1", "0", "hyperbolic", "wave"),
+])
+def test_classification_constant_coefficients(A, B, C, kind, model):
+    r = _pde("classify", "", "", A, B, "", C, "")
+    assert r["ok"], r.get("error")
+    assert ("is %s" % kind) in r["summary"] and model in r["summary"]
+    m = r["methods"][0]
+    assert m["particular_latex"] == "\\text{%s}" % kind
+    assert [s["title"] for s in m["steps"]] == [
+        "Compute the discriminant", "Read off the type", "Find the characteristics",
+        "Canonical form", "Type"]
+    disc = sp.sympify(B) ** 2 - 4 * sp.sympify(A) * sp.sympify(C)
+    assert ("B^2 - 4AC = %s" % sp.latex(disc)) in m["steps"][0]["latex"][1]
+
+
+def test_classification_characteristics_and_mixed_type():
+    wave = _pde("classify", "", "", "1", "0", "", "-4", "")["methods"][0]
+    lines = " ".join(wave["steps"][2]["latex"])
+    assert "y - 2 x = \\text{const}" in lines and "y + 2 x = \\text{const}" in lines
+    mixed = _pde("classify", "", "", "0", "1", "", "0", "")["methods"][0]
+    assert "x = \\text{const}" in " ".join(mixed["steps"][2]["latex"])
+    tricomi = _pde("classify", "", "", "y", "0", "", "1", "")
+    assert "mixed type" in tricomi["summary"]
+    text = " ".join(tricomi["methods"][0]["steps"][1]["latex"])
+    assert "\\text{hyperbolic where } y < 0" in text
+    assert "\\text{parabolic where } y = 0" in text
+    assert "\\text{elliptic where } 0 < y" in text
+    laplace = _pde("classify", "", "", "1", "0", "", "1", "")["methods"][0]
+    assert "no real characteristics" in laplace["steps"][2]["text"]
+    assert "at least one" in _pde_err("classify", "", "", "", "", "", "", "")["error"]
+
+
+def _fd(f, steps, L, k, n, dt):
+    r = _pde("fd", f, steps, L, k, "", n, dt)
+    assert r["ok"], r.get("error")
+    return r
+
+
+def test_finite_differences_first_level_and_accuracy():
+    r = _fd("sin(pi x)", "10", "1", "1", "4", "0.02")
+    assert [m["id"] for m in r["methods"]] == ["ftcs", "cn"]
+    ftcs = r["methods"][0]
+    levels = ftcs["plot"]["levels"]
+    assert len(levels) == 11 and levels[0]["points"][0] == [0.0, 0.0]
+    # By hand: dx = 0.25, r = 0.32, u_1^1 = s + r (1 - 2 s + 0) with s = sin(pi/4).
+    s = math.sin(math.pi / 4)
+    assert abs(levels[1]["points"][1][1] - (s + 0.32 * (1 - 2 * s))) < 1e-12
+    assert abs(levels[1]["t"] - 0.02) < 1e-12
+    exact = lambda x, t: math.exp(-math.pi ** 2 * t) * math.sin(math.pi * x)
+    for m in r["methods"]:
+        assert m["verified"] is True
+        for x, u in m["plot"]["levels"][-1]["points"]:
+            assert abs(u - exact(x, 0.2)) < 0.02
+        table = next(st for st in m["steps"] if "table" in st)["table"]
+        assert all(len(row) == len(table["headers"]) for row in table["rows"])
+
+
+def test_finite_differences_converge_and_stability():
+    def error(scheme, n, dt, steps):
+        r = _fd("sin(pi x)", str(steps), "1", "1", str(n), dt)
+        m = next(mm for mm in r["methods"] if mm["id"] == scheme)
+        t_end = m["plot"]["levels"][-1]["t"]
+        return max(abs(u - math.exp(-math.pi ** 2 * t_end) * math.sin(math.pi * x))
+                   for x, u in m["plot"]["levels"][-1]["points"])
+    # Same final time 0.1, mesh ratio 0.4 on both grids.
+    assert error("ftcs", 8, "0.00625", 16) < error("ftcs", 4, "0.025", 4) / 3
+    assert error("cn", 8, "0.00625", 16) < error("cn", 4, "0.025", 4) / 3
+    unstable = _fd("sin(pi x) + 0.1 sin(3 pi x)", "60", "1", "1", "10", "0.01")   # r = 1
+    assert "unstable" in unstable["summary"]
+    ftcs, cn = unstable["methods"]
+    assert ftcs["verified"] is None and "unstable" in ftcs["steps"][2]["text"]
+    assert cn["verified"] is True
+    final = cn["plot"]["levels"][-1]["points"]
+    assert max(abs(u) for _, u in final) < 0.01          # decayed, not blown up
+
+
+def test_finite_difference_errors():
+    assert "number of intervals" in _pde_err("fd", "x", "5", "1", "1", "", "", "0.1")["error"]
+    assert "between 2 and 40" in _pde_err("fd", "x", "5", "1", "1", "", "100", "0.1")["error"]
+    assert "time step" in _pde_err("fd", "x", "5", "1", "1", "", "4", "")["error"]
+    assert "number of time steps" in _pde_err("fd", "x", "", "1", "1", "", "4", "0.1")["error"]
+    assert "positive" in _pde_err("fd", "x", "5", "1", "1", "", "4", "-1")["error"]
+
+
+def _uxy(expr_text):
+    return sp.lambdify((X, Y), sp.sympify(expr_text, locals={"x": X, "y": Y}), "math")
+
+
+def test_disk_exact_cases():
+    r = _pde("disk", "cos(t)", "", "2")
+    assert r["ok"] and r["surface"] is True and r["domain"]["mask"] == "disk"
+    u = _uxy(r["methods"][0]["plot"]["particular_expr"])
+    assert abs(u(0.7, -0.4) - 0.35) < 1e-9                      # x / R
+    double = _uxy(_pde("disk", "sin(2t)", "", "1")["methods"][0]["plot"]["particular_expr"])
+    assert abs(double(0.3, 0.5) - 2 * 0.3 * 0.5) < 1e-9          # r^2 sin 2θ = 2xy
+    constant = _pde("disk", "7", "", "3")["methods"][0]
+    assert abs(_uxy(constant["plot"]["particular_expr"])(1.0, -2.0) - 7) < 1e-9
+    mixed = _pde("disk", "5 + cos(3t) - 2 sin(t)", "", "2")["methods"][0]
+    um = _uxy(mixed["plot"]["particular_expr"])
+    x, y = 0.9, 0.6
+    r3 = (math.hypot(x, y) / 2) ** 3 * math.cos(3 * math.atan2(y, x))
+    assert abs(um(x, y) - (5 - y + r3)) < 1e-8
+    step_ = next(s for s in mixed["steps"] if s["title"] == "Compute the coefficients")
+    assert step_["table"]["rows"] == [["1", "0", "-2"], ["3", "1", "0"]]
+    for m in (constant, mixed):
+        assert m["verified"] is True
+
+
+def test_disk_step_against_poisson_integral():
+    r = _pde("disk", "u(t)", "", "1")          # 1 on the upper half of the circle, 0 below
+    m = r["methods"][0]
+    assert m["verified"] is True
+    u = _uxy(m["plot"]["particular_expr"])
+    assert abs(u(0.0, 0.0) - 0.5) < 1e-9       # the centre is the mean of the boundary values
+    centre = next(s for s in m["steps"] if s["title"] == "The value at the centre")
+    assert "\\frac{1}{2}" in centre["latex"][0]
+
+    def poisson(x, y):
+        rad, ang = math.hypot(x, y), math.atan2(y, x)
+        kernel = lambda p: (1 - rad ** 2) / (1 - 2 * rad * mpmath.cos(ang - p) + rad ** 2)
+        return float(mpmath.quad(kernel, [0, math.pi])) / (2 * math.pi)
+    for x, y in ((0.2, 0.3), (-0.5, 0.1), (0.1, -0.6), (0.6, 0.5)):
+        assert abs(u(x, y) - poisson(x, y)) < 2e-3
+    assert "radius" in _pde_err("disk", "cos(t)", "", "")["error"]
+    assert "boundary values" in _pde_err("disk", "", "", "1")["error"]
+    assert "Unknown symbol" in _pde_err("disk", "cos(x)", "", "1")["error"]
 
 
 def test_export_fixtures():
@@ -1434,6 +1623,15 @@ def test_export_fixtures():
         fh.write(pde("wave", "sin(pi x)", "", "1", "2", "", "", ""))
     with open(os.path.join(out, "pde_laplace.json"), "w") as fh:
         fh.write(pde("laplace", "sin(pi x)", "", "1", "2", "top", "", ""))
+    extra = {
+        "pde_characteristics.json": ("characteristics", "e^(-x^2)", "", "2", "1", "", "", ""),
+        "pde_classify.json": ("classify", "", "", "y", "0", "", "1", ""),
+        "pde_fd.json": ("fd", "sin(pi x)", "10", "1", "1", "", "4", "0.02"),
+        "pde_disk.json": ("disk", "u(t)", "", "1"),
+    }
+    for name, args in extra.items():
+        with open(os.path.join(out, name), "w") as fh:
+            fh.write(pde(*args))
     with open(os.path.join(out, "fourier.json"), "w") as fh:
         fh.write(fourier("x", "", "pi"))
     with open(os.path.join(out, "boundary.json"), "w") as fh:

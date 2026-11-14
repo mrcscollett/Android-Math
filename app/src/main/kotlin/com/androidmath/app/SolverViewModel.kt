@@ -19,6 +19,9 @@ import kotlinx.coroutines.launch
 
 enum class Screen { Home, Input, Result }
 
+/** PDE tools whose number boxes hold something other than a length and a speed. */
+private val PDE_TOOLS = setOf("characteristics", "classify", "fd", "disk")
+
 /** Which section of the app the input screen is serving. */
 enum class Mode(val title: String) {
     FirstOrder("First-order equation"),
@@ -126,9 +129,11 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
     /** Which partial sum or eigenfunction the graph shows. */
     var partialIndex by mutableStateOf(0)
 
-    /** PDE section: "heat", "wave" or "laplace". */
+    /** PDE section: heat, wave, laplace, characteristics, classify, fd or disk. */
     var pdeKind by mutableStateOf("heat")
         private set
+    /** Finite differences: the number of time steps. */
+    var pdeSteps by mutableStateOf("10")
     /** Heat equation boundary conditions: 00, nn, 0n, n0 or tt (ends held at T1 and T2). */
     var pdeBc by mutableStateOf("00")
     /** Laplace's equation: the side that carries f (top, bottom, left or right). */
@@ -147,6 +152,11 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
     /** Switches the PDE section between the heat, wave and Laplace equations. */
     fun choosePde(kind: String) {
         if (kind == pdeKind) return
+        // The number boxes mean different things in these four tools (coefficients,
+        // grid sizes, a radius), so they are not carried over from another problem.
+        if (kind in PDE_TOOLS || pdeKind in PDE_TOOLS) {
+            x0 = ""; y0 = ""; pdeT1 = ""; pdeT2 = ""
+        }
         pdeKind = kind
         // Only the wave equation has a second function (the initial velocity).
         equation2 = TextFieldValue("")
@@ -173,8 +183,11 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
         get() = when {
             mode == Mode.Systems -> "system"
             mode == Mode.Fourier -> "fourier"
-            mode == Mode.Pde ->
-                if (pdeKind == "laplace" && (pdeSide == "left" || pdeSide == "right")) "pdey" else "pde"
+            mode == Mode.Pde -> when {
+                pdeKind == "laplace" && (pdeSide == "left" || pdeSide == "right") -> "pdey"
+                pdeKind == "disk" -> "pdet"     // the boundary values are a function of the angle t
+                else -> "pde"
+            }
             mode != Mode.Laplace -> "ode"
             inverse -> "inverse"
             else -> "forward"
@@ -286,7 +299,8 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
             Mode.Systems -> "system"
             Mode.Fourier -> "fourier"
             Mode.Boundary -> if (eigenMode) "eigen" else "boundary"
-            Mode.Pde -> pdeKind
+            // "laplace" alone already names the Laplace-transform section.
+            Mode.Pde -> if (pdeKind == "laplace") "laplace_eq" else pdeKind
         }
 
     /** Every input box of the current section, by the names [restore] understands. */
@@ -317,9 +331,10 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
                 fields["equation2"] = equation2.text
                 fields["x0"] = x0; fields["y0"] = y0
                 fields["bc"] = if (pdeKind == "laplace") pdeSide else pdeBc
-                if (pdeKind == "heat" && pdeBc == "tt") {
+                if ((pdeKind == "heat" && pdeBc == "tt") || pdeKind in PDE_TOOLS) {
                     fields["t1"] = pdeT1; fields["t2"] = pdeT2
                 }
+                if (pdeKind == "fd") fields["steps"] = pdeSteps
             }
             Mode.Boundary -> if (eigenMode) {
                 fields["equation"] = ""
@@ -354,6 +369,13 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
             "wave" -> "Wave: f = ${equation.text.ifBlank { "0" }},  g = ${equation2.text.ifBlank { "0" }},  " +
                 "L = $x0,  c = $y0"
             "laplace" -> "Laplace: u = ${equation.text} on the $pdeSide side,  a = $x0,  b = $y0"
+            "characteristics" -> "Characteristics: ($x0) u_x + ($y0) u_t = (${pdeT1.ifBlank { "0" }}) u + " +
+                "(${pdeT2.ifBlank { "0" }})" + (if (equation.text.isNotBlank()) ",  u(x,0) = ${equation.text}" else "")
+            "classify" -> "Classify: A = ${x0.ifBlank { "0" }},  B = ${y0.ifBlank { "0" }},  " +
+                "C = ${pdeT1.ifBlank { "0" }}"
+            "fd" -> "Finite differences: f = ${equation.text},  L = $x0,  k = $y0,  N = $pdeT1,  " +
+                "dt = $pdeT2,  $pdeSteps steps"
+            "disk" -> "Disk: u = ${equation.text} on r = $x0"
             else -> "Heat: f = ${equation.text},  L = $x0,  k = $y0"
         }
         Mode.FirstOrder, Mode.SecondOrder -> equation.text +
@@ -393,14 +415,14 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
                 "system" -> Mode.Systems
                 "fourier" -> Mode.Fourier
                 "boundary", "eigen" -> Mode.Boundary
-                "heat", "wave", "laplace" -> Mode.Pde
+                "heat", "wave", "laplace_eq", "characteristics", "classify", "fd", "disk" -> Mode.Pde
                 else -> Mode.FirstOrder
             }
         )
         chooseInverse(key == "inverse")
         chooseEigen(key == "eigen")
-        val pdeProblem = key == "heat" || key == "wave" || key == "laplace"
-        if (pdeProblem) choosePde(key)
+        val pdeProblem = key == "heat" || key == "wave" || key == "laplace_eq" || key in PDE_TOOLS
+        if (pdeProblem) choosePde(if (key == "laplace_eq") "laplace" else key)
         setEquationText(fields["equation"] ?: "")
         setEquation2Text(fields["equation2"] ?: "")
         setEquation3Text(fields["equation3"] ?: "")
@@ -414,7 +436,7 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
         if (condition != null) {
             if (!pdeProblem) {
                 eigenKind = condition
-            } else if (key == "laplace") {
+            } else if (key == "laplace_eq") {
                 chooseSide(condition)
             } else {
                 pdeBc = condition
@@ -422,6 +444,7 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
         }
         pdeT1 = fields["t1"] ?: ""
         pdeT2 = fields["t2"] ?: ""
+        fields["steps"]?.let { pdeSteps = it }
         x0 = fields["x0"] ?: ""
         y0 = fields["y0"] ?: ""
         yPrime0 = fields["yp0"] ?: ""
@@ -437,6 +460,10 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
             mode == Mode.Boundary && eigenMode -> x0.isNotBlank()
             mode == Mode.Systems -> equation.text.isNotBlank() && equation2.text.isNotBlank()
             mode == Mode.Pde && pdeKind == "wave" -> equation.text.isNotBlank() || equation2.text.isNotBlank()
+            // Classification takes only coefficients; characteristics can do without f.
+            mode == Mode.Pde && pdeKind == "classify" ->
+                x0.isNotBlank() || y0.isNotBlank() || pdeT1.isNotBlank()
+            mode == Mode.Pde && pdeKind == "characteristics" -> x0.isNotBlank() && y0.isNotBlank()
             else -> equation.text.isNotBlank()
         }
 
@@ -459,7 +486,12 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
             } else if (mode == Mode.Pde) {
                 Engine.pde(
                     getApplication(), pdeKind, equation.text,
-                    if (pdeKind == "wave") equation2.text else "", x0, y0,
+                    when (pdeKind) {
+                        "wave" -> equation2.text
+                        "fd" -> pdeSteps
+                        else -> ""
+                    },
+                    x0, y0,
                     if (pdeKind == "laplace") pdeSide else pdeBc, pdeT1, pdeT2,
                 )
             } else if (mode == Mode.Boundary && eigenMode) {

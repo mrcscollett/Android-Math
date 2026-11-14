@@ -726,7 +726,16 @@ def solve(kind, f_text, g_text, p1, p2, bc, t1, t2):
         return wave(f_text, g_text, p1, p2)
     if kind == "laplace":
         return laplace(f_text, p1, p2, bc or "top")
-    raise InputError("Choose the heat, wave or Laplace equation.")
+    if kind in ("characteristics", "classify", "fd", "disk"):
+        from . import pdes2
+        if kind == "characteristics":   # a, b in p1, p2; c, d in t1, t2
+            return pdes2.characteristics(p1, p2, t1, t2, f_text)
+        if kind == "classify":          # A, B, C in p1, p2, t1
+            return pdes2.classify(p1, p2, t1)
+        if kind == "fd":                # L, k in p1, p2; N, dt in t1, t2; steps in g
+            return pdes2.finite_differences(f_text, p1, p2, t1, t2, g_text)
+        return pdes2.disk(f_text, p1)   # R in p1
+    raise InputError("Choose the kind of problem.")
 
 
 def preview(text, var="x"):

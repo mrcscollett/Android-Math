@@ -79,7 +79,8 @@ private val SECTIONS = listOf(
     ),
     Section(
         "Partial differential equations",
-        "Heat, wave and Laplace equations by separation of variables, with animated solutions",
+        "Heat, wave and Laplace equations with animated solutions, characteristics, " +
+            "classification and finite differences",
         Mode.Pde,
     ),
     Section("Physics 1", "Motion, drag, springs, pendulums, cooling", null),

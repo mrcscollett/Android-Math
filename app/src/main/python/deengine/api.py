@@ -50,6 +50,10 @@ def pde(kind, f_text, g_text="", p1="", p2="", bc="", t1="", t2=""):
 
     heat: f, -, L, k, bc in {00, nn, 0n, n0, tt}, T1, T2.  wave: f, g, L, c.
     laplace: f, -, a, b, side in {top, bottom, left, right}.
+    characteristics (a u_x + b u_t = c u + d): f, -, a, b, -, c, d.
+    classify (A u_xx + B u_xy + C u_yy): -, -, A, B, -, C.
+    fd (finite differences for the heat equation): f, steps, L, k, -, N, dt.
+    disk (Laplace's equation, u(R, t) = f(t) with t the angle): f, -, R.
     """
     from . import pdes as pde_module
     return _guard(lambda: pde_module.solve(kind, f_text or "", g_text or "", p1 or "", p2 or "",
@@ -66,10 +70,10 @@ def preview(text, kind="ode"):
     try:
         if not text.strip():
             return json.dumps({"ok": True, "latex": "", "order": 1})
-        if kind in ("pde", "pdey"):
+        if kind in ("pde", "pdey", "pdet"):
             from . import pdes as pde_module
             return json.dumps({"ok": True, "order": 0,
-                               "latex": pde_module.preview(text, "y" if kind == "pdey" else "x")})
+                               "latex": pde_module.preview(text, {"pdey": "y", "pdet": "t"}.get(kind, "x"))})
         if kind == "fourier":
             return json.dumps({"ok": True, "order": 0, "latex": fourier_series.preview(text)})
         if kind == "system":

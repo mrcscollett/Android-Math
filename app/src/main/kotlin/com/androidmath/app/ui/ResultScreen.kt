@@ -60,6 +60,10 @@ fun ResultScreen(model: SolverViewModel) {
                             "pde" -> when (result.pde) {
                                 "wave" -> "Wave equation"
                                 "laplace" -> "Laplace's equation"
+                                "characteristics" -> "Characteristics"
+                                "classify" -> "Classification"
+                                "fd" -> "Finite differences"
+                                "disk" -> "Laplace's equation"
                                 else -> "Heat equation"
                             }
                             else -> "Solution"

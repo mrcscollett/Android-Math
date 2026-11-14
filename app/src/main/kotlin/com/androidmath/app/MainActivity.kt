@@ -39,11 +39,14 @@ class MainActivity : ComponentActivity() {
     /**
      * Lets another app or a test open a problem directly. Extras: "equation"
      * (required), "mode" (first, second, numeric, laplace, inverse, system,
-     * fourier, boundary, eigen, heat, wave, laplace), "tab" (0 steps, 1 graph), and the input
+     * fourier, boundary, eigen, heat, wave, laplace_eq, characteristics, classify,
+     * fd, disk), "tab" (0 steps, 1 graph), and the input
      * boxes by name: equation2, equation3, x0, y0, yp0, z0, h, n, and for the
      * boundary section a, va, ka, b, vb, kb ("dy" for a slope condition), bc.
      * For the PDE modes: equation is f, equation2 is g (wave), x0 and y0 are
      * L and k, L and c, or a and b; bc is the condition code or the side; t1, t2.
+     * characteristics: x0, y0, t1, t2 are a, b, c, d. classify: x0, y0, t1 are
+     * A, B, C. fd: x0, y0 are L, k; t1, t2 are N, dt; "steps". disk: x0 is R.
      */
     private fun openFromIntent(intent: Intent?) {
         val source = intent ?: return
@@ -58,7 +61,7 @@ class MainActivity : ComponentActivity() {
     private companion object {
         val FIELD_NAMES = listOf(
             "equation", "equation2", "equation3", "x0", "y0", "yp0", "z0", "h", "n",
-            "a", "va", "ka", "b", "vb", "kb", "bc", "t1", "t2",
+            "a", "va", "ka", "b", "vb", "kb", "bc", "t1", "t2", "steps",
         )
     }
 }

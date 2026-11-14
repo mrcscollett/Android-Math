@@ -98,6 +98,41 @@ private val LAPLACE_EXAMPLES = listOf(
     PdeExample("1 on the right", "1", "", "1", "3", "right"),
 )
 
+// For these four, [g] is unused except in finite differences, where it holds the number of
+// time steps; p1, p2, t1, t2 are the number boxes in the order they appear on the screen.
+private val CHARACTERISTICS_EXAMPLES = listOf(
+    PdeExample("Pulse moving at speed 2", "e^(-x^2)", "", "2", "1"),
+    PdeExample("Decaying wave", "sin(x)", "", "1", "1", t1 = "-1"),
+    PdeExample("u_t + x u_x = 0", "1/(1+x^2)", "", "x", "1"),
+    PdeExample("General solution", "", "", "3", "1"),
+)
+
+private val CLASSIFY_EXAMPLES = listOf(
+    PdeExample("u_xx - 4u_yy", "", "", "1", "0", t1 = "-4"),
+    PdeExample("u_xx + u_yy", "", "", "1", "0", t1 = "1"),
+    PdeExample("u_xx + 2u_xy + u_yy", "", "", "1", "2", t1 = "1"),
+    PdeExample("Tricomi: y u_xx + u_yy", "", "", "y", "0", t1 = "1"),
+)
+
+private val FD_EXAMPLES = listOf(
+    PdeExample("sin(pi x), r = 0.32", "sin(pi x)", "10", "1", "1", t1 = "4", t2 = "0.02"),
+    PdeExample("Unstable: r = 1", "sin(pi x) + 0.1 sin(3 pi x)", "60", "1", "1", t1 = "10", t2 = "0.01"),
+    PdeExample("x(1-x), finer grid", "x(1-x)", "20", "1", "1", t1 = "10", t2 = "0.004"),
+)
+
+private val DISK_EXAMPLES = listOf(
+    PdeExample("cos(t), R = 2", "cos(t)", "", "2", ""),
+    PdeExample("Hot upper half", "u(t)", "", "1", ""),
+    PdeExample("abs(t)", "abs(t)", "", "1", ""),
+    PdeExample("5 + cos(3t) - 2 sin(t)", "5 + cos(3t) - 2 sin(t)", "", "2", ""),
+)
+
+private val PDE_KINDS = listOf(
+    "heat" to "Heat", "wave" to "Wave", "laplace" to "Laplace",
+    "disk" to "Disk", "characteristics" to "Characteristics",
+    "fd" to "Finite differences", "classify" to "Classify",
+)
+
 private val HEAT_CONDITIONS = listOf(
     "00" to "Both ends at 0",
     "nn" to "Both ends insulated",
@@ -122,7 +157,12 @@ fun PdeInputScreen(model: SolverViewModel) {
     val wave = kind == "wave"
     val laplace = kind == "laplace"
     // On the left and right sides of the rectangle the data is a function of y.
-    val variable = if (laplace && (model.pdeSide == "left" || model.pdeSide == "right")) "y" else "x"
+    val variable = when {
+        laplace && (model.pdeSide == "left" || model.pdeSide == "right") -> "y"
+        kind == "disk" -> "t"       // the angle
+        else -> "x"
+    }
+    val classify = kind == "classify"
 
     Scaffold(
         topBar = {
@@ -144,26 +184,22 @@ fun PdeInputScreen(model: SolverViewModel) {
                     .padding(horizontal = 16.dp),
             ) {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(
-                        selected = kind == "heat",
-                        onClick = { model.choosePde("heat") },
-                        label = { Text("Heat") },
-                    )
-                    FilterChip(
-                        selected = wave,
-                        onClick = { model.choosePde("wave") },
-                        label = { Text("Wave") },
-                    )
-                    FilterChip(
-                        selected = laplace,
-                        onClick = { model.choosePde("laplace") },
-                        label = { Text("Laplace") },
-                    )
+                    for ((code, label) in PDE_KINDS) {
+                        FilterChip(
+                            selected = kind == code,
+                            onClick = { model.choosePde(code) },
+                            label = { Text(label) },
+                        )
+                    }
                 }
                 Text(
                     when (kind) {
                         "wave" -> "u_tt = c² u_xx on 0 < x < L, both ends fixed"
                         "laplace" -> "u_xx + u_yy = 0 on 0 < x < a, 0 < y < b"
+                        "disk" -> "u_xx + u_yy = 0 inside the circle r < R, with u = f on the circle"
+                        "characteristics" -> "a u_x + b u_t = c u + d, with u(x, 0) = f(x)"
+                        "fd" -> "u_t = k u_xx on 0 < x < L, both ends at 0, solved on a grid"
+                        "classify" -> "A u_xx + B u_xy + C u_yy + (lower-order terms) = 0"
                         else -> "u_t = k u_xx on 0 < x < L"
                     },
                     style = MaterialTheme.typography.bodyMedium,
@@ -184,19 +220,27 @@ fun PdeInputScreen(model: SolverViewModel) {
                     }
                 }
 
-                PdeExpressionField(
-                    value = model.equation,
-                    onChange = model::onEquationChange,
-                    label = when (kind) {
-                        "wave" -> "Initial displacement f(x)"
-                        "laplace" -> "Boundary values f($variable)"
-                        else -> "Initial temperature f(x)"
-                    },
-                    placeholder = if (variable == "y") "y(1-y)" else "x(1-x)",
-                    isError = model.previewError != null || model.inputError != null,
-                    onFocus = { model.activeField = 0 },
-                    onDone = { submit() },
-                )
+                if (!classify) {
+                    PdeExpressionField(
+                        value = model.equation,
+                        onChange = model::onEquationChange,
+                        label = when (kind) {
+                            "wave" -> "Initial displacement f(x)"
+                            "laplace" -> "Boundary values f($variable)"
+                            "disk" -> "Boundary values f(t), t the angle"
+                            "characteristics" -> "Initial values f(x)  (optional)"
+                            else -> "Initial temperature f(x)"
+                        },
+                        placeholder = when (variable) {
+                            "y" -> "y(1-y)"
+                            "t" -> "cos(t)"
+                            else -> if (kind == "characteristics") "e^(-x^2)" else "x(1-x)"
+                        },
+                        isError = model.previewError != null || model.inputError != null,
+                        onFocus = { model.activeField = 0 },
+                        onDone = { submit() },
+                    )
+                }
                 if (wave) {
                     PdeExpressionField(
                         value = model.equation2,
@@ -209,64 +253,108 @@ fun PdeInputScreen(model: SolverViewModel) {
                     )
                 }
 
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    val keys = listOf(variable, "^", "(", ")", "*", "/", "+", "-",
-                        "sin(", "cos(", "e^(", "sqrt(", "u(", "pi")
-                    for (key in keys) {
-                        FilledTonalButton(
-                            onClick = { model.insert(key) },
-                            contentPadding = PaddingValues(horizontal = 12.dp),
-                            modifier = Modifier.height(40.dp),
-                        ) { Text(key, fontFamily = FontFamily.Monospace) }
+                // Classification has no function to type, so no keys and no preview.
+                if (!classify) {
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        val keys = listOf(variable, "^", "(", ")", "*", "/", "+", "-",
+                            "sin(", "cos(", "e^(", "sqrt(", "u(", "pi")
+                        for (key in keys) {
+                            FilledTonalButton(
+                                onClick = { model.insert(key) },
+                                contentPadding = PaddingValues(horizontal = 12.dp),
+                                modifier = Modifier.height(40.dp),
+                            ) { Text(key, fontFamily = FontFamily.Monospace) }
+                        }
+                    }
+
+                    OutlinedCard(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                        Box(Modifier.fillMaxWidth().height(64.dp), contentAlignment = Alignment.Center) {
+                            val error = model.previewError
+                            val hint = when {
+                                error != null -> ""
+                                model.engineReady -> "Your function appears here as you type"
+                                else -> "Starting the solver…"
+                            }
+                            MathWebView(
+                                script = "showPreview(${jsString(if (error == null) model.previewLatex else "")}, ${jsString(hint)});",
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                            if (error != null) {
+                                Text(
+                                    error,
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.padding(horizontal = 12.dp),
+                                )
+                            }
+                        }
                     }
                 }
 
-                OutlinedCard(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
-                    Box(Modifier.fillMaxWidth().height(64.dp), contentAlignment = Alignment.Center) {
-                        val error = model.previewError
-                        val hint = when {
-                            error != null -> ""
-                            model.engineReady -> "Your function appears here as you type"
-                            else -> "Starting the solver…"
+                when (kind) {
+                    "characteristics" -> {
+                        PdeSectionLabel("Coefficients a and b (may contain x and t)")
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            PdeNumberField(model.x0, { model.x0 = it }, "a")
+                            PdeNumberField(model.y0, { model.y0 = it }, "b")
                         }
-                        MathWebView(
-                            script = "showPreview(${jsString(if (error == null) model.previewLatex else "")}, ${jsString(hint)});",
-                            modifier = Modifier.fillMaxSize(),
+                        PdeSectionLabel("Right-hand side c u + d (optional)")
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            PdeNumberField(model.pdeT1, { model.pdeT1 = it }, "c")
+                            PdeNumberField(model.pdeT2, { model.pdeT2 = it }, "d")
+                        }
+                    }
+                    "classify" -> {
+                        PdeSectionLabel("Coefficients (numbers, or expressions in x and y)")
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            PdeNumberField(model.x0, { model.x0 = it }, "A")
+                            PdeNumberField(model.y0, { model.y0 = it }, "B")
+                            PdeNumberField(model.pdeT1, { model.pdeT1 = it }, "C")
+                        }
+                    }
+                    "fd" -> {
+                        PdeSectionLabel("Length and diffusivity")
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            PdeNumberField(model.x0, { model.x0 = it }, "L")
+                            PdeNumberField(model.y0, { model.y0 = it }, "k")
+                        }
+                        PdeSectionLabel("Grid: intervals, time step, number of steps")
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            PdeNumberField(model.pdeT1, { model.pdeT1 = it }, "N")
+                            PdeNumberField(model.pdeT2, { model.pdeT2 = it }, "\u0394t")
+                            PdeNumberField(model.pdeSteps, { model.pdeSteps = it }, "steps")
+                        }
+                    }
+                    "disk" -> {
+                        PdeSectionLabel("Radius")
+                        PdeNumberField(model.x0, { model.x0 = it }, "R")
+                    }
+                    else -> {
+                        Text(
+                            when (kind) {
+                                "wave" -> "Length and wave speed"
+                                "laplace" -> "Size of the rectangle"
+                                else -> "Length and diffusivity"
+                            },
+                            style = MaterialTheme.typography.labelLarge,
+                            modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
                         )
-                        if (error != null) {
-                            Text(
-                                error,
-                                color = MaterialTheme.colorScheme.error,
-                                style = MaterialTheme.typography.bodySmall,
-                                modifier = Modifier.padding(horizontal = 12.dp),
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            PdeNumberField(model.x0, { model.x0 = it }, if (laplace) "a" else "L")
+                            PdeNumberField(
+                                model.y0, { model.y0 = it },
+                                when (kind) {
+                                    "wave" -> "c"
+                                    "laplace" -> "b"
+                                    else -> "k"
+                                },
                             )
                         }
                     }
-                }
-
-                Text(
-                    when (kind) {
-                        "wave" -> "Length and wave speed"
-                        "laplace" -> "Size of the rectangle"
-                        else -> "Length and diffusivity"
-                    },
-                    style = MaterialTheme.typography.labelLarge,
-                    modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    PdeNumberField(model.x0, { model.x0 = it }, if (laplace) "a" else "L")
-                    PdeNumberField(
-                        model.y0, { model.y0 = it },
-                        when (kind) {
-                            "wave" -> "c"
-                            "laplace" -> "b"
-                            else -> "k"
-                        },
-                    )
                 }
 
                 if (kind == "heat") {
@@ -314,7 +402,7 @@ fun PdeInputScreen(model: SolverViewModel) {
                         Spacer(Modifier.width(8.dp))
                         Text(if (model.engineReady) "Solving…" else "Starting the solver…")
                     } else {
-                        Text("Solve step by step")
+                        Text(if (classify) "Classify" else "Solve step by step")
                     }
                 }
 
@@ -330,6 +418,10 @@ fun PdeInputScreen(model: SolverViewModel) {
                     val examples = when (kind) {
                         "wave" -> WAVE_EXAMPLES
                         "laplace" -> LAPLACE_EXAMPLES
+                        "characteristics" -> CHARACTERISTICS_EXAMPLES
+                        "classify" -> CLASSIFY_EXAMPLES
+                        "fd" -> FD_EXAMPLES
+                        "disk" -> DISK_EXAMPLES
                         else -> HEAT_EXAMPLES
                     }
                     for (example in examples) {
@@ -338,7 +430,7 @@ fun PdeInputScreen(model: SolverViewModel) {
                                 // Choose the side first: it decides whether f is read in x or y.
                                 if (laplace) model.chooseSide(example.bc) else if (kind == "heat") model.pdeBc = example.bc
                                 model.setEquationText(example.f)
-                                model.setEquation2Text(example.g)
+                                if (kind == "fd") model.pdeSteps = example.g else model.setEquation2Text(example.g)
                                 model.x0 = example.p1
                                 model.y0 = example.p2
                                 model.pdeT1 = example.t1
@@ -349,9 +441,20 @@ fun PdeInputScreen(model: SolverViewModel) {
                     }
                 }
                 Text(
-                    "Use ^ for powers and * or a space between a variable and a function. A " +
-                        "function given by two formulas can be written with the unit step, as in " +
-                        "the plucked-string example: u(x - 1/2) is 0 before x = 1/2 and 1 after.",
+                    when (kind) {
+                        "disk" -> "Write the angle as t, measured from the positive x-axis and " +
+                            "running from -pi to pi. The unit step u(t) is 0 on the lower half of " +
+                            "the circle and 1 on the upper half."
+                        "characteristics" -> "The coefficients may contain x and t. Leave f empty " +
+                            "to get the general solution with an arbitrary function F."
+                        "classify" -> "Only the second-order coefficients decide the type. Leave " +
+                            "a box empty for 0."
+                        "fd" -> "The mesh ratio is r = k \u0394t / \u0394x\u00b2 with \u0394x = L / N. " +
+                            "The explicit scheme needs r \u2264 1/2; try a larger time step to see it fail."
+                        else -> "Use ^ for powers and * or a space between a variable and a function. A " +
+                            "function given by two formulas can be written with the unit step, as in " +
+                            "the plucked-string example: u(x - 1/2) is 0 before x = 1/2 and 1 after."
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 12.dp, bottom = 24.dp),
@@ -394,6 +497,15 @@ private fun PdeExpressionField(
 }
 
 @Composable
+private fun PdeSectionLabel(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelLarge,
+        modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
+    )
+}
+
+@Composable
 private fun PdeNumberField(value: String, onChange: (String) -> Unit, label: String) {
     OutlinedTextField(
         value = value,
@@ -417,17 +529,24 @@ fun PdeTab(model: SolverViewModel) {
     val solution = remember(method) { Expr.parseOrNull(method?.plot?.particularExpr) }
     val initial = remember(result.initialExpr) { Expr.parseOrNull(result.initialExpr) }
     val domain = result.domain
+    // Finite differences: the grid values at each time level.
+    val levels = method?.plot?.levels.orEmpty()
 
-    if (solution == null || domain == null) {
+    if (domain == null || (solution == null && levels.isEmpty())) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text(
-                "There is no formula to graph for this method.",
+                when (result.pde) {
+                    "classify" -> "The type of an equation has no graph. See the Steps tab."
+                    "characteristics" -> "The general solution contains an arbitrary function, " +
+                        "so there is no single curve to draw. Enter f(x) to see a solution move."
+                    else -> "There is no formula to graph for this method."
+                },
                 modifier = Modifier.padding(24.dp),
             )
         }
         return
     }
-    if (result.surface) {
+    if (result.surface && solution != null) {
         HeatMapTab(solution, domain)
         return
     }
@@ -458,6 +577,8 @@ fun PdeTab(model: SolverViewModel) {
                 initial = initial,
                 domain = domain,
                 time = model.pdeTime.toDouble(),
+                gridPoints = if (levels.isEmpty() || method == null) null
+                else levels[method.plot!!.levelNear(model.pdeTime.toDouble())].pointArray(),
                 modifier = Modifier.fillMaxSize(),
             )
         }
@@ -487,7 +608,21 @@ fun PdeTab(model: SolverViewModel) {
                 )
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                PdeLegend(MaterialTheme.colorScheme.primary, if (wave) "String at time t" else "Temperature at time t")
+                if (solution != null) {
+                    PdeLegend(
+                        MaterialTheme.colorScheme.primary,
+                        when (result.pde) {
+                            "wave" -> "String at time t"
+                            "characteristics" -> "u at time t"
+                            "fd" -> "Series solution"
+                            else -> "Temperature at time t"
+                        },
+                    )
+                }
+                if (levels.isNotEmpty()) {
+                    Spacer(Modifier.width(16.dp))
+                    PdeLegend(MaterialTheme.colorScheme.tertiary, "Grid values")
+                }
                 if (initial != null) {
                     Spacer(Modifier.width(16.dp))
                     PdeLegend(MaterialTheme.colorScheme.outline, "Initial profile")
@@ -509,7 +644,8 @@ private fun PdeLegend(color: Color, label: String) {
 /** u(x, t) over the interval at one instant, on axes that stay fixed while t changes. */
 @Composable
 private fun ProfileView(
-    solution: Expr, initial: Expr?, domain: Domain, time: Double, modifier: Modifier = Modifier,
+    solution: Expr?, initial: Expr?, domain: Domain, time: Double,
+    gridPoints: DoubleArray? = null, modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.colorScheme
     val measurer = rememberTextMeasurer()
@@ -560,10 +696,24 @@ private fun ProfileView(
             )
             drawCurves(faint, colors.outline, 1.5.dp.toPx())
         }
-        val now = Plot.curve(
-            { x -> if (inside(x)) solution.eval(x, time, 0.0) else Double.NaN }, vp, w, h, samples,
-        )
-        drawCurves(now, colors.primary, 3.dp.toPx())
+        if (solution != null) {
+            val now = Plot.curve(
+                { x -> if (inside(x)) solution.eval(x, time, 0.0) else Double.NaN }, vp, w, h, samples,
+            )
+            drawCurves(now, colors.primary, 3.dp.toPx())
+        }
+        if (gridPoints != null && gridPoints.size >= 4) {
+            // The finite-difference values at the time level nearest the slider.
+            drawCurves(Plot.path(gridPoints, vp, w, h), colors.tertiary, 2.dp.toPx())
+            var k = 0
+            while (k + 1 < gridPoints.size) {
+                drawCircle(
+                    colors.tertiary, 3.5.dp.toPx(),
+                    Offset(vp.toPxX(gridPoints[k], w), vp.toPxY(gridPoints[k + 1], h)),
+                )
+                k += 2
+            }
+        }
     }
 }
 
@@ -592,8 +742,12 @@ private fun HeatMapTab(solution: Expr, domain: Domain) {
     val spanY = (domain.yMax - domain.yMin).coerceAtLeast(1e-9)
     val nx = if (spanX >= spanY) 72 else (72 * spanX / spanY).toInt().coerceIn(8, 72)
     val ny = if (spanY >= spanX) 72 else (72 * spanY / spanX).toInt().coerceIn(8, 72)
+    val disk = domain.mask == "disk"
     val cells = remember(solution, domain) {
-        Plot.heatMap(solution, domain.xMin, domain.xMax, domain.yMin, domain.yMax, nx, ny, domain.uMin, domain.uMax)
+        Plot.heatMap(
+            solution, domain.xMin, domain.xMax, domain.yMin, domain.yMax, nx, ny,
+            domain.uMin, domain.uMax, disk,
+        )
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -622,12 +776,21 @@ private fun HeatMapTab(solution: Expr, domain: Domain) {
                     )
                 }
             }
-            drawRect(
-                color = colors.onSurface,
-                topLeft = Offset(left, top),
-                size = Size(rectW, rectH),
-                style = Stroke(1.5.dp.toPx()),
-            )
+            if (disk) {
+                drawCircle(
+                    color = colors.onSurface,
+                    radius = minOf(rectW, rectH) / 2f,
+                    center = Offset(left + rectW / 2f, top + rectH / 2f),
+                    style = Stroke(1.5.dp.toPx()),
+                )
+            } else {
+                drawRect(
+                    color = colors.onSurface,
+                    topLeft = Offset(left, top),
+                    size = Size(rectW, rectH),
+                    style = Stroke(1.5.dp.toPx()),
+                )
+            }
         }
         Column(
             modifier = Modifier
@@ -642,8 +805,13 @@ private fun HeatMapTab(solution: Expr, domain: Domain) {
                 PdeLegend(hot, "u = ${"%.3g".format(domain.uMax)}")
             }
             Text(
-                "The rectangle is 0 < x < ${"%.3g".format(domain.xMax)} across and " +
-                    "0 < y < ${"%.3g".format(domain.yMax)} up. Darker means larger u.",
+                if (disk) {
+                    "The disk has radius ${"%.3g".format(domain.xMax)}; the angle t = 0 points " +
+                        "right and increases anticlockwise. Darker means larger u."
+                } else {
+                    "The rectangle is 0 < x < ${"%.3g".format(domain.xMax)} across and " +
+                        "0 < y < ${"%.3g".format(domain.yMax)} up. Darker means larger u."
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

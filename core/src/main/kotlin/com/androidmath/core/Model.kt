@@ -25,7 +25,7 @@ data class SolveResult(
     val equilibria: List<Equilibrium> = emptyList(),
     /** Half-length of the interval of interest (Fourier, boundary, eigenvalue problems). */
     val span: Double? = null,
-    /** For kind "pde": "heat", "wave" or "laplace". */
+    /** For kind "pde": heat, wave, laplace, characteristics, classify, fd or disk. */
     val pde: String = "",
     /** For PDEs: the region the solution is drawn on and its range of values. */
     val domain: Domain? = null,
@@ -47,6 +47,8 @@ data class Domain(
     @SerialName("t_max") val tMax: Double = 0.0,
     @SerialName("u_min") val uMin: Double = -1.0,
     @SerialName("u_max") val uMax: Double = 1.0,
+    /** "disk" when the region is the circle inscribed in the rectangle. */
+    val mask: String = "",
 )
 
 @Serializable
@@ -88,8 +90,33 @@ data class PlotExprs(
     val points: List<List<Double>> = emptyList(),
     /** Curves to step through with a slider: Fourier partial sums or eigenfunctions. */
     val partials: List<PartialSum> = emptyList(),
+    /** Finite-difference solutions: the grid values at successive times. */
+    val levels: List<TimeLevel> = emptyList(),
 ) {
+    /** The index of the time level closest to [time] (0 when there are none). */
+    fun levelNear(time: Double): Int {
+        var best = 0
+        for (i in levels.indices) {
+            if (kotlin.math.abs(levels[i].t - time) < kotlin.math.abs(levels[best].t - time)) best = i
+        }
+        return best
+    }
+
     /** The points flattened to [x0, y0, x1, y1, ...]. */
+    fun pointArray(): DoubleArray {
+        val out = DoubleArray(points.size * 2)
+        for ((i, p) in points.withIndex()) {
+            out[2 * i] = p.getOrElse(0) { Double.NaN }
+            out[2 * i + 1] = p.getOrElse(1) { Double.NaN }
+        }
+        return out
+    }
+}
+
+/** The numerical solution at time [t], as [x, u] pairs along the rod. */
+@Serializable
+data class TimeLevel(val t: Double, val points: List<List<Double>> = emptyList()) {
+    /** The points flattened to [x0, u0, x1, u1, ...]. */
     fun pointArray(): DoubleArray {
         val out = DoubleArray(points.size * 2)
         for ((i, p) in points.withIndex()) {
