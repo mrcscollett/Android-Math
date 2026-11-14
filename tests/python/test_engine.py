@@ -1589,6 +1589,366 @@ def test_disk_step_against_poisson_integral():
     assert "Unknown symbol" in _pde_err("disk", "cos(x)", "", "1")["error"]
 
 
+# ---- math tools: linear algebra, calculus, series, complex numbers ---------
+
+import cmath
+
+from deengine import api as engine_api, tool
+
+
+def _tool(name, op, text, a="", b=""):
+    return json.loads(tool(name, op, text, a, b))
+
+
+def _matrix(latex):
+    """Read a pmatrix out of LaTeX as a list of rows of SymPy numbers."""
+    body = latex.split("\\begin{pmatrix}", 1)[1].split("\\end{pmatrix}", 1)[0]
+    from sympy.parsing.sympy_parser import parse_expr
+    def number(cell):
+        cell = cell.strip().replace("\\frac{", "((").replace("}{", ")/(").replace("}", "))").replace("- ", "-")
+        return sp.Rational(parse_expr(cell))
+    return [[number(c) for c in row.split("&")] for row in body.split("\\\\")]
+
+
+def _mul(A, B):
+    return [[sum(A[i][k] * B[k][j] for k in range(len(B))) for j in range(len(B[0]))] for i in range(len(A))]
+
+
+@pytest.mark.parametrize("text", ["2 1; 5 3", "1 2 3; 0 1 4; 5 6 0", "2 0 0 1; 0 1 0 0; 1 0 1 0; 0 0 0 4"])
+def test_inverse_multiplies_to_identity(text):
+    r = _tool("linalg", "inverse", text)
+    A = [[sp.Rational(v) for v in row.split()] for row in text.split(";")]
+    n = len(A)
+    identity = [[sp.Integer(int(i == j)) for j in range(n)] for i in range(n)]
+    for m in r["methods"]:
+        if m["applicable"]:
+            assert m["verified"] is True
+            assert _mul(A, _matrix(m["particular_latex"])) == identity
+    assert method(r, "gaussjordan")["applicable"]
+    assert method(r, "adjugate")["applicable"] == (n <= 3)
+
+
+def test_singular_matrix_has_no_inverse():
+    r = _tool("linalg", "inverse", "1 2; 2 4")
+    assert r["ok"] and not any(m["applicable"] for m in r["methods"])
+    assert "singular" in r["summary"]
+
+
+@pytest.mark.parametrize("text,value", [
+    ("1 2; 3 4", -2), ("2 0 1; 1 3 2; 1 1 1", 0), ("1 2 3; 4 5 6; 7 8 10", -3),
+    ("1 2 3 4; 0 1 0 2; 2 0 1 1; 1 1 1 1", 7), ("1/2 1; 3 4", -1), ("0 1; 1 0", -1),
+])
+def test_determinant_two_ways(text, value):
+    r = _tool("linalg", "det", text)
+    assert [m["id"] for m in r["methods"]] == ["cofactor", "rowreduce"]
+    for m in r["methods"]:
+        assert m["verified"] is True
+        assert m["particular_latex"].endswith("= %s" % sp.latex(sp.Integer(value)))
+
+
+def test_linear_systems():
+    one = _tool("linalg", "solve", "2 1; 1 3", "5 10")
+    assert "one solution" in one["summary"]
+    assert [m["id"] for m in one["methods"] if m["applicable"]] == ["gauss", "cramer", "inverse"]
+    assert method(one, "gauss")["particular_latex"] == "x = 1,\\quad y = 3"      # 2+3 = 5, 1+9 = 10
+    assert all(m["verified"] for m in one["methods"])
+    three = _tool("linalg", "solve", "1 1 1; 0 2 5; 2 5 -1", "6; -4; 27")
+    assert method(three, "cramer")["particular_latex"] == "x = 5,\\quad y = 3,\\quad z = -2"
+    none = _tool("linalg", "solve", "1 2; 2 4", "3; 7")
+    assert "No solution" in none["summary"]
+    many = _tool("linalg", "solve", "1 2; 2 4", "3; 6")
+    assert "Infinitely many" in many["summary"] and method(many, "gauss")["verified"] is True
+    assert "t\\begin{pmatrix}-2\\\\1\\end{pmatrix}" in method(many, "gauss")["particular_latex"]
+    wide = _tool("linalg", "solve", "1 1 1; 0 1 2", "6 5")
+    assert "1 free variable" in wide["summary"]
+    assert "right-hand side" in _tool("linalg", "solve", "1 2; 3 4")["error"]
+    assert "one number for each row" in _tool("linalg", "solve", "1 2; 3 4", "1 2 3")["error"]
+
+
+def test_row_reduction_steps():
+    r = _tool("linalg", "rref", "1 2 3; 4 5 6; 7 8 10")
+    m = r["methods"][0]
+    assert m["verified"] is True and "Rank 3" in r["summary"]
+    assert _matrix(m["particular_latex"]) == [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+    assert any("R_{2} \\to R_{2} - 4\\,R_{1}" in l for s in m["steps"] for l in s["latex"])
+    assert "Rank 1" in _tool("linalg", "rref", "1 2; 2 4")["summary"]
+
+
+@pytest.mark.parametrize("text,values,diagonalizable", [
+    ("2 0; 0 3", [2, 3], True), ("4 1; 2 3", [2, 5], True), ("1 1; 0 1", [1], False),
+    ("2 1 0; 0 2 0; 0 0 3", [2, 3], False), ("2 0 0; 0 3 4; 0 4 9", [1, 2, 11], True),
+])
+def test_eigenvalues(text, values, diagonalizable):
+    r = _tool("linalg", "eigen", text)
+    m = r["methods"][0]
+    assert m["verified"] is True
+    assert m["particular_latex"] == ",\\quad ".join("\\lambda = %d" % v for v in values)
+    assert ("Diagonalizable" in r["summary"]) == diagonalizable
+    titles = [s["title"] for s in m["steps"]]
+    assert ("Diagonalize" in titles) == diagonalizable and ("Jordan form" in titles) == (not diagonalizable)
+    A = sp.Matrix([[sp.Rational(v) for v in row.split()] for row in text.split(";")])
+    assert sorted(A.eigenvals()) == values
+
+
+def test_eigen_complex_and_unsolvable():
+    r = _tool("linalg", "eigen", "0 1; -1 0")
+    assert r["methods"][0]["verified"] is True and "i" in r["methods"][0]["particular_latex"]
+    hard = _tool("linalg", "eigen", "1 2 3; 4 5 6; 7 8 10")
+    assert hard["ok"] and not hard["methods"][0]["applicable"]
+
+
+def test_subspaces_independence_wronskian():
+    r = _tool("linalg", "spaces", "1 2 3; 2 4 6; 1 0 1")
+    assert "Rank 2, nullity 1" in r["summary"] and r["methods"][0]["verified"] is True
+    assert "dependent" in _tool("linalg", "independence", "1 2; 2 4; 3 6")["summary"]
+    assert "linearly independent" in _tool("linalg", "independence", "1 0; 0 1; 1 1")["summary"]
+    w = _tool("linalg", "wronskian", "e^x, e^(2x)")
+    assert w["methods"][0]["particular_latex"] == "W(x) = e^{3 x}" and "independent" in w["summary"]
+    assert "dependent" in _tool("linalg", "wronskian", "x, 2x")["summary"]
+    assert _tool("linalg", "wronskian", "sin(x), cos(x)")["methods"][0]["particular_latex"] == "W(x) = -1"
+    assert "two to four" in _tool("linalg", "wronskian", "x")["error"]
+
+
+@pytest.mark.parametrize("text,fragment", [
+    ("1 2; 3", "same number"), ("1 2 3 4 5", "at most 4"), ("a b; c d", "must be a number"), ("", "empty"),
+])
+def test_matrix_input_errors(text, fragment):
+    assert fragment in _tool("linalg", "rref", text)["error"]
+    assert "square" in _tool("linalg", "det", "1 2 3; 4 5 6")["error"]
+
+
+INTEGRALS = ["x e^x", "x cos(x^2)", "1/(x^2-1)", "e^x sin(x)", "sin(x)^2", "1/(x^2+2x+5)",
+             "x^3 - 2x + 1/x", "ln(x)", "tan(x)", "x^2 e^(3x)", "1/(x(x+1)^2)", "cos(x)^3"]
+
+
+@pytest.mark.parametrize("text", INTEGRALS)
+def test_indefinite_integral_by_quadrature(text):
+    r = _tool("calculus", "integral", text)
+    assert r["ok"], r.get("error")
+    from deengine.parsing import parse_expression
+    f, symbols = parse_expression(text, ["x"])
+    fn = sp.lambdify(symbols["x"], f, "mpmath")
+    lo, hi = 1.2, 1.5
+    reference = mpmath.quad(fn, [lo, hi])
+    for m in r["methods"]:
+        assert m["verified"] is True
+        assert len(m["steps"]) >= 3
+        assert m["particular_latex"].endswith("+ C")
+        F = sp.sympify(m["plot"]["antiderivative"], locals={"x": X})
+        got = complex(sp.N(F.subs(X, hi) - F.subs(X, lo)))
+        assert abs(got - reference) < 1e-9, (got, reference)
+
+
+def test_integral_technique_names():
+    names = lambda t: [m["name"] for m in _tool("calculus", "integral", t)["methods"]]
+    assert names("x cos(x^2)") == ["Substitution"]
+    assert names("ln(x)") == ["Integration by parts"]
+    assert "Partial fractions" in [s["title"] for s in _tool("calculus", "integral", "1/(x^2-1)")["methods"][0]["steps"]]
+    assert "Substitute back" in [s["title"] for s in _tool("calculus", "integral", "x cos(x^2)")["methods"][0]["steps"]]
+    assert "no closed form" in _tool("calculus", "integral", "x^x")["error"]
+
+
+@pytest.mark.parametrize("text,a,b,value", [
+    ("x^2", "0", "3", 9.0), ("sin(x)", "0", "pi", 2.0), ("e^(-x)", "0", "oo", 1.0),
+    ("1/x^2", "1", "oo", 1.0), ("1/sqrt(x)", "0", "1", 2.0), ("e^(-x^2)", "-oo", "oo", math.sqrt(math.pi)),
+    ("x e^(-x)", "0", "oo", 1.0), ("1/(1+x^2)", "-oo", "oo", math.pi),
+])
+def test_definite_integrals(text, a, b, value):
+    r = _tool("calculus", "definite", text, a, b)
+    m = r["methods"][0]
+    assert m["verified"] is True, m["verify_note"]
+    from deengine.parsing import parse_expression
+    f, symbols = parse_expression(text, ["x"])
+    lo = -mpmath.inf if a == "-oo" else float(sp.sympify(a))
+    hi = mpmath.inf if b == "oo" else float(sp.sympify(b))
+    assert abs(mpmath.quad(sp.lambdify(symbols["x"], f, "mpmath"), [lo, hi]) - value) < 1e-8
+    assert abs(float(sp.sympify(r["summary"][len("Value: "):-1])) - value) < 1e-9
+
+
+def test_divergent_and_bad_definite_integrals():
+    assert "diverges" in _tool("calculus", "definite", "1/x", "1", "oo")["summary"]
+    assert "diverges" in _tool("calculus", "definite", "1/x", "0", "1")["summary"]
+    assert "lower limit" in _tool("calculus", "definite", "x", "", "1")["error"]
+
+
+@pytest.mark.parametrize("text", ["1/(x^2-1)", "(x^3+1)/(x^2-4)", "(2x+1)/((x-1)^2 (x^2+1))",
+                                  "(5x-4)/(x^2-x-2)", "x^2/(x^2+1)", "1/(x^3+x)"])
+def test_partial_fractions_recombine(text):
+    r = _tool("calculus", "fractions", text)
+    m = r["methods"][0]
+    assert m["verified"] is True
+    from deengine.parsing import parse_expression
+    f, symbols = parse_expression(text, ["x"])
+    x = symbols["x"]
+    parts = sp.apart(f, x)
+    for point in (0.37, 2.6, -3.1):
+        assert abs(float(parts.subs(x, point)) - float(f.subs(x, point))) < 1e-9
+    assert "Set up the template" in [s["title"] for s in m["steps"]]
+
+
+def test_partial_fraction_values_and_errors():
+    m = _tool("calculus", "fractions", "(5x-4)/(x^2-x-2)")["methods"][0]
+    consts = next(s for s in m["steps"] if s["title"] == "Solve for the constants")
+    assert consts["latex"][0] in ("A = 2,\\quad B = 3", "A = 3,\\quad B = 2")
+    assert "cover-up" in consts["text"]
+    assert "ratio of polynomials" in _tool("calculus", "fractions", "sin(x)/x")["error"]
+    assert "degree 3" in _tool("calculus", "fractions", "1/(x^3+x+1)")["error"]
+
+
+@pytest.mark.parametrize("text,rule", [("x^2 sin(x)", "Product rule"), ("sin(x)/x", "Quotient rule"),
+                                       ("e^(3x^2)", "Chain rule"), ("x^3 + 2x", "Sum rule")])
+def test_derivative_rules(text, rule):
+    r = _tool("calculus", "derivative", text)
+    m = r["methods"][0]
+    assert m["verified"] is True and rule in [s["title"] for s in m["steps"]]
+    from deengine.parsing import parse_expression
+    f, symbols = parse_expression(text, ["x"])
+    got = sp.sympify(m["plot"]["particular_expr"], locals={"x": X})
+    want = mpmath.diff(sp.lambdify(symbols["x"], f, "mpmath"), 0.8)
+    assert abs(float(got.subs(X, 0.8)) - want) < 1e-8
+
+
+@pytest.mark.parametrize("text,a,order,function", [
+    ("e^x", "", "6", mpmath.exp), ("sin(x)", "", "7", mpmath.sin), ("1/(1-x)", "", "6", lambda v: 1 / (1 - v)),
+    ("ln(1+x)", "", "5", lambda v: mpmath.log(1 + v)), ("ln(x)", "1", "4", mpmath.log),
+    ("cos(x)", "pi", "4", mpmath.cos), ("sqrt(1+x)", "", "4", lambda v: mpmath.sqrt(1 + v)),
+])
+def test_taylor_coefficients(text, a, order, function):
+    r = _tool("series", "taylor", text, a, order)
+    m = r["methods"][0]
+    assert m["verified"] is True
+    centre = float(sp.sympify(a)) if a else 0.0
+    reference = mpmath.taylor(function, centre, int(order))
+    table = next(s for s in m["steps"] if "table" in s)["table"]
+    for k, row in enumerate(table["rows"]):
+        got = sp.sympify(m["plot"]["partials"][-1]["expr"], locals={"x": X})
+        coefficient = sp.Poly(sp.expand(got.subs(X, X + sp.nsimplify(centre, [sp.pi]))), X).coeff_monomial(X**k)
+        assert abs(float(coefficient) - float(reference[k])) < 1e-9, (k, coefficient, reference[k])
+    best = sp.sympify(m["plot"]["partials"][-1]["expr"], locals={"x": X})
+    assert abs(float(best.subs(X, centre + 0.2)) - float(function(centre + 0.2))) < 1e-3
+
+
+def test_taylor_convergence_statements():
+    text = lambda t, a="": " ".join(s["text"] + " ".join(s["latex"]) for s in _tool("series", "taylor", t, a)["methods"][0]["steps"])
+    assert "R = \\infty" in text("e^x")
+    assert "R = 1" in text("1/(1-x)") and "R = 1" in text("ln(1+x)") and "R = 1" in text("1/(1+x^2)")
+    assert "R = 2" in text("1/(1-x)", "-1")
+    assert "not defined" in _tool("series", "taylor", "1/x")["error"]
+    assert "between 1 and 12" in _tool("series", "taylor", "e^x", "", "40")["error"]
+
+
+@pytest.mark.parametrize("text,fragment,tests", [
+    ("1/n", "diverges", {"pseries", "integral"}),
+    ("1/n^2", "converges absolutely", {"pseries", "integral"}),
+    ("(-1)^n/n", "conditionally", {"alternating"}),
+    ("(-1)^(n+1)/sqrt(n)", "conditionally", {"alternating"}),
+    ("(1/2)^n", "converges absolutely", {"geometric", "ratio"}),
+    ("3 (2/3)^n", "converges absolutely", {"geometric"}),
+    ("(3/2)^n", "diverges", {"geometric"}),
+    ("n!/n^n", "converges absolutely", {"ratio"}),
+    ("2^n/n!", "converges absolutely", {"ratio"}),
+    ("n/(n+1)", "diverges", {"nth"}),
+    ("1/(n^2+1)", "converges absolutely", {"comparison"}),
+    ("1/sqrt(n)", "diverges", {"pseries"}),
+    ("(-1)^n/n^3", "converges absolutely", {"pseries"}),
+])
+def test_series_convergence(text, fragment, tests):
+    r = _tool("series", "convergence", text)
+    assert fragment in r["summary"], r["summary"]
+    assert tests <= {m["id"] for m in r["methods"] if m["applicable"]}
+    assert len(r["methods"]) == 8 and all(m["reason"] for m in r["methods"])
+
+
+def test_series_sums_and_honesty():
+    assert "pi**2/6" in _tool("series", "convergence", "1/n^2")["summary"]
+    assert "sum (from n = 1) is 1." in _tool("series", "convergence", "(1/2)^n")["summary"]
+    assert abs(sum(0.5 ** k for k in range(1, 60)) - 1) < 1e-12
+    unsettled = _tool("series", "convergence", "1/(n ln(n+1))")
+    assert "None of the tests" in unsettled["summary"] and not any(m["applicable"] for m in unsettled["methods"])
+    assert "expression in n" in _tool("series", "convergence", "3")["error"]
+
+
+@pytest.mark.parametrize("text,a,answer", [
+    ("1/n", "", "R = 1,\\qquad \\text{interval: } [-1,\\ 1)"),
+    ("1/n^2", "1", "R = 1,\\qquad \\text{interval: } [0,\\ 2]"),
+    ("1/n!", "", "R = \\infty,\\qquad \\text{interval: } (-\\infty, \\infty)"),
+    ("n!", "", "R = 0,\\qquad \\text{interval: } \\{0\\}"),
+    ("2^n", "", "R = \\frac{1}{2},\\qquad \\text{interval: } (- \\frac{1}{2},\\ \\frac{1}{2})"),
+    ("n/3^n", "2", "R = 3,\\qquad \\text{interval: } (-1,\\ 5)"),
+])
+def test_radius_and_interval(text, a, answer):
+    assert _tool("series", "radius", text, a)["methods"][0]["particular_latex"] == answer
+
+
+@pytest.mark.parametrize("text,value", [
+    ("(1 + 2i)/(3 - i)", (1 + 2j) / (3 - 1j)), ("(1 + i)^8", (1 + 1j) ** 8), ("e^(i pi/3)", cmath.exp(1j * cmath.pi / 3)),
+    ("sqrt(-4)", 2j), ("(2-3i)(1+i)", (2 - 3j) * (1 + 1j)), ("i^i", 1j ** 1j), ("1/i", 1 / 1j),
+    ("(3+4i)^2 - 2i", (3 + 4j) ** 2 - 2j), ("5", 5 + 0j),
+])
+def test_complex_arithmetic(text, value):
+    r = _tool("complex", "evaluate", text)
+    for m in r["methods"]:
+        if m["applicable"]:
+            assert m["verified"] is True
+            x, y = m["plot"]["points"][1]
+            assert abs(complex(x, y) - value) < 1e-9
+    steps = " ".join(l for s in r["methods"][0]["steps"] for l in s["latex"])
+    assert "|z|" in steps
+
+
+def test_complex_methods_and_forms():
+    r = _tool("complex", "evaluate", "(1 + i)^8")
+    assert [m["id"] for m in r["methods"] if m["applicable"]] == ["rectangular", "demoivre"]
+    assert method(r, "demoivre")["particular_latex"] == "z = 16"
+    q = _tool("complex", "evaluate", "(1 + 2i)/(3 - i)")
+    assert "Multiply by the conjugate" in [s["title"] for s in q["methods"][0]["steps"]]
+    assert q["methods"][0]["particular_latex"] == "z = \\frac{1}{10} + \\frac{7}{10}\\,i"
+    polar = _tool("complex", "evaluate", "1 + i")["methods"][0]
+    assert any("\\sqrt{2}" in l and "\\frac{\\pi}{4}" in l for s in polar["steps"] for l in s["latex"])
+    assert "Unknown symbol 'x'" in _tool("complex", "evaluate", "x + i")["error"]
+
+
+@pytest.mark.parametrize("text,n", [("1", 3), ("-8", 3), ("1+i", 2), ("16", 4), ("i", 5), ("-1", 2)])
+def test_complex_roots(text, n):
+    r = _tool("complex", "roots", text, str(n))
+    m = r["methods"][0]
+    assert m["verified"] is True
+    points = m["plot"]["points"]
+    assert len(points) == n + 1 and points[0] == points[-1]
+    from deengine.complexnum import parse
+    target = complex(sp.N(parse(text)))
+    roots = [complex(x, y) for x, y in points[:-1]]
+    for w in roots:
+        assert abs(w ** n - target) < 1e-9
+    assert len({(round(w.real, 6), round(w.imag, 6)) for w in roots}) == n
+    table = next(s for s in m["steps"] if "table" in s)["table"]
+    assert len(table["rows"]) == n
+
+
+def test_roots_of_unity_and_errors():
+    cube = _tool("complex", "roots", "1", "3")["methods"][0]
+    assert cube["steps"][2]["table"]["rows"][1][2] == "- \\frac{1}{2} + \\frac{\\sqrt{3}}{2}\\,i"
+    assert "whole number" in _tool("complex", "roots", "i", "")["error"]
+    assert "between 2 and 12" in _tool("complex", "roots", "i", "40")["error"]
+    assert "only one root" in _tool("complex", "roots", "0", "2")["error"]
+
+
+def test_tool_api_and_previews():
+    assert json.loads(engine_api.linalg("det", "1 2; 3 4"))["summary"] == "The determinant is -2."
+    assert json.loads(engine_api.calculus("definite", "x^2", "0", "3"))["summary"] == "Value: 9."
+    assert json.loads(engine_api.series_tool("radius", "1/n"))["title"] == "Radius of convergence"
+    assert json.loads(engine_api.complex_number("roots", "1", "3"))["kind"] == "tool"
+    assert not json.loads(tool("nope", "x", "1"))["ok"]
+    assert "pmatrix" in json.loads(preview("1 2\n3 4", "linalg:det"))["latex"]
+    assert json.loads(preview("x e^x", "calculus:integral"))["latex"] == "\\int x e^{x}\\,dx"
+    assert json.loads(preview("(1+2i)/(3-i)", "complex:evaluate"))["latex"] == "\\frac{1 + 2 i}{3 - i}"
+    assert json.loads(preview("n!/n^n", "series:convergence"))["ok"]
+    assert not json.loads(preview("1 2; a", "linalg:det"))["ok"]
+    # "i" is the imaginary unit only in the complex tool; elsewhere it is an unknown symbol.
+    assert "Unknown symbol" in json.loads(solve("y' = i*y"))["error"]
+    assert "Unknown symbol" in _tool("calculus", "integral", "i x")["error"]
+
+
 def test_export_fixtures():
     """Write sample outputs used by the Kotlin contract tests."""
     import os
@@ -1638,3 +1998,11 @@ def test_export_fixtures():
         fh.write(boundary("y'' + y = 0", "0", "y", "0", "pi/2", "y", "1"))
     with open(os.path.join(out, "eigen.json"), "w") as fh:
         fh.write(eigen_problem("dd", "pi"))
+    for name, args in {
+        "tool_linalg.json": ("linalg", "solve", "2 1; 1 3", "5 10"),
+        "tool_calculus.json": ("calculus", "integral", "x cos(x^2)"),
+        "tool_series.json": ("series", "taylor", "sin(x)", "", "7"),
+        "tool_complex.json": ("complex", "roots", "-8", "3"),
+    }.items():
+        with open(os.path.join(out, name), "w") as fh:
+            fh.write(tool(*args))

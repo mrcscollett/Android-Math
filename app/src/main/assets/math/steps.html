@@ -187,7 +187,7 @@ function showMethod(methodId) {
   }
 
   var problem = el("div", "problem");
-  problem.appendChild(el("div", "label", r.ic ? "Initial value problem" : "Equation"));
+  problem.appendChild(el("div", "label", r.ic ? "Initial value problem" : (r.kind === "tool" ? "Problem" : "Equation")));
   problem.appendChild(displayMath(r.ic ? r.input_latex + ",\\qquad " + r.ic.latex : r.input_latex));
   root.appendChild(problem);
 
@@ -199,7 +199,7 @@ function showMethod(methodId) {
     root.appendChild(prose(r.summary, "summary"));
   } else {
     root.appendChild(el("div", "label",
-      r.kind === "numeric" ? "About this method" : "Why this method works here"));
+      (r.kind === "numeric" || r.kind === "tool") ? "About this method" : "Why this method works here"));
     root.appendChild(prose(method.reason, "why"));
     method.steps.forEach(function (s, i) { root.appendChild(stepNode(s, i + 1)); });
   }

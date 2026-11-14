@@ -38,7 +38,7 @@ import com.androidmath.core.HistoryEntry
 
 private data class Section(val title: String, val detail: String, val mode: Mode?)
 
-private val SECTIONS = listOf(
+private val EQUATION_SECTIONS = listOf(
     Section(
         "First-order equations",
         "Separable, linear, exact, Bernoulli and homogeneous equations, with slope fields",
@@ -83,8 +83,40 @@ private val SECTIONS = listOf(
             "classification and finite differences",
         Mode.Pde,
     ),
+)
+
+private val TOOL_SECTIONS = listOf(
+    Section(
+        "Linear algebra",
+        "Row reduction, systems, determinants, inverses, eigenvalues, null space, the Wronskian",
+        Mode.LinearAlgebra,
+    ),
+    Section(
+        "Calculus",
+        "Integrals with the technique shown, improper integrals, partial fractions, derivatives",
+        Mode.Calculus,
+    ),
+    Section(
+        "Series",
+        "Taylor series, convergence tests, radius and interval of convergence",
+        Mode.Series,
+    ),
+    Section(
+        "Complex numbers",
+        "Arithmetic, polar and exponential form, De Moivre's theorem, roots",
+        Mode.Complex,
+    ),
+)
+
+private val UPCOMING_SECTIONS = listOf(
     Section("Physics 1", "Motion, drag, springs, pendulums, cooling", null),
     Section("Physics 2", "RC, RL and RLC circuits, charged particles, decay", null),
+)
+
+private val GROUPS = listOf(
+    "Differential equations" to EQUATION_SECTIONS,
+    "Math tools" to TOOL_SECTIONS,
+    "Coming soon" to UPCOMING_SECTIONS,
 )
 
 @Composable
@@ -116,34 +148,17 @@ fun HomeScreen(model: SolverViewModel) {
             horizontalAlignment = Alignment.CenterHorizontally,
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
         ) {
-            items(SECTIONS) { section ->
-                Card(
-                    modifier = Modifier
-                        .widthIn(max = 640.dp)
-                        .fillMaxWidth()
-                        .padding(vertical = 6.dp)
-                        .alpha(if (section.mode != null) 1f else 0.55f)
-                        .then(
-                            if (section.mode != null) Modifier.clickable { model.open(section.mode) }
-                            else Modifier
-                        ),
-                    colors = if (section.mode != null) {
-                        CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
-                    } else {
-                        CardDefaults.cardColors()
-                    },
-                ) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text(section.title, style = MaterialTheme.typography.titleMedium)
-                        Text(section.detail, style = MaterialTheme.typography.bodyMedium)
-                        if (section.mode == null) {
-                            Text(
-                                "Coming soon",
-                                style = MaterialTheme.typography.labelMedium,
-                                modifier = Modifier.padding(top = 4.dp),
-                            )
-                        }
-                    }
+            for ((heading, sections) in GROUPS) {
+                item(key = "group-$heading") {
+                    Text(
+                        heading,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.widthIn(max = 640.dp).fillMaxWidth().padding(top = 12.dp, bottom = 2.dp),
+                    )
+                }
+                items(sections, key = { "section-" + it.title }) { section ->
+                    SectionCard(section, model)
                 }
             }
             if (favorites.isNotEmpty()) {
@@ -161,6 +176,38 @@ fun HomeScreen(model: SolverViewModel) {
                 items(recent, key = { "r" + it.key }) { entry ->
                     HistoryRow(entry, model)
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SectionCard(section: Section, model: SolverViewModel) {
+    Card(
+        modifier = Modifier
+            .widthIn(max = 640.dp)
+            .fillMaxWidth()
+            .padding(vertical = 6.dp)
+            .alpha(if (section.mode != null) 1f else 0.55f)
+            .then(
+                if (section.mode != null) Modifier.clickable { model.open(section.mode) }
+                else Modifier
+            ),
+        colors = if (section.mode != null) {
+            CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+        } else {
+            CardDefaults.cardColors()
+        },
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text(section.title, style = MaterialTheme.typography.titleMedium)
+            Text(section.detail, style = MaterialTheme.typography.bodyMedium)
+            if (section.mode == null) {
+                Text(
+                    "Coming soon",
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
             }
         }
     }

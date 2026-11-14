@@ -60,16 +60,69 @@ def pde(kind, f_text, g_text="", p1="", p2="", bc="", t1="", t2=""):
                                            bc or "", t1 or "", t2 or ""))
 
 
+def _tool_module(name):
+    from . import calculus as calculus_tools, complexnum, linalg as linear_algebra, powerseries
+    modules = {"linalg": linear_algebra, "calculus": calculus_tools,
+               "series": powerseries, "complex": complexnum}
+    if name not in modules:
+        raise InputError("Unknown tool.")
+    return modules[name]
+
+
+def tool(name, operation, text, extra1="", extra2=""):
+    """The stand-alone math tools. `name` is linalg, calculus, series or complex.
+
+    linalg: rref, solve (extra1 = b), det, inverse, eigen, spaces, independence, wronskian.
+    calculus: integral, definite (extra1, extra2 = limits), fractions, derivative.
+    series: taylor (extra1 = centre, extra2 = order), convergence, radius (extra1 = centre).
+    complex: evaluate, roots (extra1 = n).
+    """
+    def work():
+        module = _tool_module(name)
+        if name == "linalg":
+            return module.solve(operation, text or "", extra1 or "")
+        if name == "complex":
+            return module.solve(operation, text or "", extra1 or "")
+        return module.solve(operation, text or "", extra1 or "", extra2 or "")
+    return _guard(work)
+
+
+def linalg(operation, matrix_text, rhs_text=""):
+    """Linear algebra on a matrix typed as rows separated by ';' (see tool)."""
+    return tool("linalg", operation, matrix_text, rhs_text)
+
+
+def calculus(operation, text, a_text="", b_text=""):
+    """Integrals, partial fractions and derivatives (see tool)."""
+    return tool("calculus", operation, text, a_text, b_text)
+
+
+def series_tool(operation, text, a_text="", b_text=""):
+    """Taylor series, convergence tests and radius of convergence (see tool)."""
+    return tool("series", operation, text, a_text, b_text)
+
+
+def complex_number(operation, text, n_text=""):
+    """Complex arithmetic, polar form and roots (see tool)."""
+    return tool("complex", operation, text, n_text)
+
+
 def preview(text, kind="ode"):
     """Render what the user has typed so far.
 
     kind is "ode" for an equation, "forward" for f(t), "inverse" for F(s),
     "system" for a pair of right-hand sides written as "f;g",
-    "fourier" for f(x) and an optional left-half formula written as "f;left".
+    "fourier" for f(x) and an optional left-half formula written as "f;left",
+    and "tool:operation" for the math tools (e.g. "linalg:det", "series:taylor").
     """
     try:
         if not text.strip():
             return json.dumps({"ok": True, "latex": "", "order": 1})
+        if ":" in kind:
+            # A math tool, written "tool:operation" (for example "linalg:det").
+            name, operation = kind.split(":", 1)
+            return json.dumps({"ok": True, "order": 0,
+                               "latex": _tool_module(name).preview(operation, text)})
         if kind in ("pde", "pdey", "pdet"):
             from . import pdes as pde_module
             return json.dumps({"ok": True, "order": 0,
@@ -90,7 +143,8 @@ def preview(text, kind="ode"):
     except InputError as err:
         return json.dumps({"ok": False, "error": str(err)})
     except Exception:
-        return json.dumps({"ok": False, "error": "I couldn't read that equation."})
+        return json.dumps({"ok": False, "error": "I couldn't read that."
+                           if ":" in kind else "I couldn't read that equation."})
 
 
 def _fail(message):

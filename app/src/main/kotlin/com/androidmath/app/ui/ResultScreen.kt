@@ -51,7 +51,7 @@ fun ResultScreen(model: SolverViewModel) {
             TopAppBar(
                 title = {
                     Text(
-                        when (result.kind) {
+                        if (result.title.isNotBlank()) result.title else when (result.kind) {
                             "numeric" -> "Approximation"
                             "transform" -> "Transform"
                             "fourier" -> "Fourier series"
@@ -85,6 +85,7 @@ fun ResultScreen(model: SolverViewModel) {
                             "numeric" -> "Compare ${methods.size} methods"
                             "transform" -> "${methods.size} ways to find this"
                             "fourier" -> "${methods.size} series for this function"
+                            "tool" -> "${methods.size} ways to do this"
                             else -> "${methods.size} ways to solve this"
                         },
                         style = MaterialTheme.typography.labelLarge,
@@ -162,7 +163,9 @@ private fun GraphTab(model: SolverViewModel) {
         Box(Modifier.weight(1f).fillMaxWidth()) {
             if (rhs == null && exact == null && points == null && overlay == null) {
                 Text(
-                    if (result.kind == "boundary") {
+                    if (result.kind == "tool") {
+                        "There is nothing to graph for this result; see the Steps tab."
+                    } else if (result.kind == "boundary") {
                         "This boundary value problem has no solution, so there is nothing to graph."
                     } else if (result.kind == "transform") {
                         "This function cannot be graphed (it contains an impulse or a " +
@@ -229,6 +232,11 @@ private fun GraphTab(model: SolverViewModel) {
                             "transform" -> "Function of t"
                             "fourier" -> "f(x) (periodic)"
                             "boundary" -> "Solution"
+                            "tool" -> when (result.title) {
+                                "Derivative" -> "Derivative"
+                                "Taylor series" -> "Function"
+                                else -> "Integrand"
+                            }
                             else -> "Exact solution"
                         },
                     )
@@ -238,11 +246,15 @@ private fun GraphTab(model: SolverViewModel) {
                     Legend(
                         MaterialTheme.colorScheme.tertiary,
                         if (result.kind == "eigen") "Eigenfunction ${partials[partialIndex].n}"
+                        else if (result.kind == "tool") "Taylor polynomial, degree ${partials[partialIndex].n}"
                         else "Partial sum, ${partials[partialIndex].n} terms",
                     )
                 }
                 if (points != null) {
-                    Legend(MaterialTheme.colorScheme.tertiary, method?.name ?: "Numerical")
+                    Legend(
+                        MaterialTheme.colorScheme.tertiary,
+                        if (result.kind == "tool") "In the complex plane" else method?.name ?: "Numerical",
+                    )
                 } else if (canTap) {
                     Legend(MaterialTheme.colorScheme.tertiary, "Numerical (RK4)")
                 }

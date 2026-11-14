@@ -512,4 +512,34 @@ class PdeTest {
         assertEquals(12, map.count { !it.isNaN() })
         assertEquals(16, Plot.heatMap(one, -1.0, 1.0, -1.0, 1.0, 4, 4, 0.0, 1.0).count { !it.isNaN() })
     }
+
+    @Test fun parsesMathTools() {
+        val linear = EngineJson.solveResult(fixture("tool_linalg.json"))
+        assertEquals("tool", linear.kind)
+        assertEquals("linalg", linear.tool)
+        assertEquals("Linear system", linear.title)
+        assertEquals(listOf("gauss", "cramer", "inverse"), linear.applicableMethods.map { it.id })
+        assertNull(linear.rhsExpr)
+
+        val integral = EngineJson.solveResult(fixture("tool_calculus.json"))
+        assertEquals("Integral", integral.title)
+        val integrand = Expr.parseOrNull(integral.applicableMethods[0].plot!!.particularExpr)!!
+        assertEquals(2.0 * kotlin.math.cos(4.0), integrand.eval(2.0, 0.0, 0.0), 1e-12)
+
+        val taylor = EngineJson.solveResult(fixture("tool_series.json"))
+        val plot = taylor.applicableMethods.single().plot!!
+        assertTrue(plot.partials.size >= 3)
+        val best = Expr.parseOrNull(plot.partials.last().expr)!!
+        assertEquals(kotlin.math.sin(0.5), best.eval(0.5, 0.0, 0.0), 1e-6)
+        assertTrue(plot.partials.zipWithNext().all { (a, b) -> a.n < b.n })
+
+        val roots = EngineJson.solveResult(fixture("tool_complex.json"))
+        val points = roots.applicableMethods.single().plot!!.pointArray()
+        assertEquals(8, points.size)                     // three roots and the first one repeated
+        for (i in 0 until 3) {
+            assertEquals(2.0, kotlin.math.hypot(points[2 * i], points[2 * i + 1]), 1e-9)
+        }
+        assertEquals(points[0], points[6], 0.0)
+        assertEquals(points[1], points[7], 0.0)
+    }
 }

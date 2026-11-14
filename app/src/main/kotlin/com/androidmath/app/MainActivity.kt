@@ -47,6 +47,8 @@ class MainActivity : ComponentActivity() {
      * L and k, L and c, or a and b; bc is the condition code or the side; t1, t2.
      * characteristics: x0, y0, t1, t2 are a, b, c, d. classify: x0, y0, t1 are
      * A, B, C. fd: x0, y0 are L, k; t1, t2 are N, dt; "steps". disk: x0 is R.
+     * Math tools (modes linalg, calculus, series, complex): "op" is the
+     * operation, equation the matrix or expression, x0 and y0 the small boxes.
      */
     private fun openFromIntent(intent: Intent?) {
         val source = intent ?: return
@@ -61,7 +63,7 @@ class MainActivity : ComponentActivity() {
     private companion object {
         val FIELD_NAMES = listOf(
             "equation", "equation2", "equation3", "x0", "y0", "yp0", "z0", "h", "n",
-            "a", "va", "ka", "b", "vb", "kb", "bc", "t1", "t2", "steps",
+            "a", "va", "ka", "b", "vb", "kb", "bc", "t1", "t2", "steps", "op",
         )
     }
 }

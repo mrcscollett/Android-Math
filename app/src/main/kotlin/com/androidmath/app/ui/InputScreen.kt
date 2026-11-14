@@ -46,6 +46,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.androidmath.app.Mode
+import com.androidmath.app.toolName
 import com.androidmath.app.SolverViewModel
 
 private val KEYS = listOf(
@@ -165,6 +166,11 @@ fun InputScreen(model: SolverViewModel) {
     if (model.mode == Mode.Pde) {
         // The PDE section has its own form (see PdeScreens.kt).
         PdeInputScreen(model)
+        return
+    }
+    if (model.mode.toolName() != null) {
+        // The math tools share one form (see ToolScreens.kt).
+        ToolInputScreen(model)
         return
     }
     val keyboard = LocalSoftwareKeyboardController.current
@@ -496,6 +502,8 @@ fun InputScreen(model: SolverViewModel) {
                     Mode.Fourier -> FOURIER_EXAMPLES
                     Mode.Boundary -> emptyList()
                     Mode.Pde -> emptyList()
+                    // The math tools never reach this screen; they have their own form.
+                    Mode.LinearAlgebra, Mode.Calculus, Mode.Series, Mode.Complex -> emptyList()
                 }
                 if (boundary && !eigen) {
                     for (example in BOUNDARY_EXAMPLES) {

@@ -192,4 +192,23 @@ done
 adb exec-out screencap -p > "$OUT/history.png"
 expect history 'Clear recent'
 
+# Math tools. The operation is passed as "op"; x0 and y0 are the tool's small boxes.
+open linalg "2 1; 1 3" "5 10" "" 0 'text="Steps"' "--es mode linalg --es op solve"
+expect linalg 'text="Linear system"'
+expect linalg 'text="Gaussian elimination"'
+expect linalg 'Write the augmented matrix'
+
+open calculus "x*cos(x^2)" "" "" 0 'text="Steps"' "--es mode calculus --es op integral"
+expect calculus 'text="Integral"'
+expect calculus 'text="Substitution"'
+expect calculus 'Substitute back'
+
+open series "sin(x)" "" "" 1 'text="Graph"' "--es mode series --es op taylor"
+expect series 'text="Taylor series"'
+expect series 'Taylor polynomial, degree'
+
+open complex "(1+2*i)/(3-i)" "" "" 0 'text="Steps"' "--es mode complex --es op evaluate"
+expect complex 'text="Complex number"'
+expect complex 'Multiply by the conjugate'
+
 exit $fail

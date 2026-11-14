@@ -90,6 +90,15 @@ object Engine {
         bc: String, t1: String, t2: String,
     ): Pair<String, SolveResult> = call(context, "pde", kind, f, g, p1, p2, bc, t1, t2)
 
+    /**
+     * A math tool. [name] is linalg, calculus, series or complex; [operation]
+     * picks what it does; [extra1] and [extra2] are its small boxes (the
+     * right-hand side b, limits of integration, a centre and an order, or n).
+     */
+    suspend fun tool(
+        context: Context, name: String, operation: String, text: String, extra1: String, extra2: String,
+    ): Pair<String, SolveResult> = call(context, "tool", name, operation, text, extra1, extra2)
+
     private suspend fun call(
         context: Context, function: String, vararg args: String,
     ): Pair<String, SolveResult> = withContext(dispatcher) {

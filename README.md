@@ -41,6 +41,15 @@ What it covers so far:
 - **Numerical methods**: Euler, improved Euler, midpoint, RK4,
   Adams-Bashforth and adaptive RK45, with step tables and the error against
   the exact solution when one is known.
+- **Linear algebra**: row reduction, linear systems (elimination, Cramer's
+  rule, inverse), determinants, inverses, eigenvalues with diagonalization or
+  Jordan form, rank and null space, independence, the Wronskian.
+- **Calculus**: integrals with the technique shown, definite and improper
+  integrals, partial fractions, derivatives.
+- **Series**: Taylor series, convergence tests for numerical series, radius
+  and interval of convergence.
+- **Complex numbers**: arithmetic, polar and exponential form, De Moivre's
+  theorem, n-th roots.
 
 ## Layout
 

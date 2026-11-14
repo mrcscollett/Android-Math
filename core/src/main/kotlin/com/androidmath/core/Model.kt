@@ -11,6 +11,9 @@ data class SolveResult(
     val error: String? = null,
     /** "symbolic" for step-by-step solutions, "numeric" for the numerical methods. */
     val kind: String = "symbolic",
+    /** For the math tools (kind "tool"): which tool, and the heading for the result screen. */
+    val tool: String = "",
+    val title: String = "",
     val order: Int = 1,
     val indep: String = "x",
     @SerialName("input_latex") val inputLatex: String = "",

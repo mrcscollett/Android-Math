@@ -32,6 +32,28 @@ enum class Mode(val title: String) {
     Fourier("Fourier series"),
     Boundary("Boundary value problems"),
     Pde("Partial differential equations"),
+    LinearAlgebra("Linear algebra"),
+    Calculus("Calculus"),
+    Series("Series"),
+    Complex("Complex numbers"),
+}
+
+/** The engine's name for a math-tool section, or null for the other sections. */
+fun Mode.toolName(): String? = when (this) {
+    Mode.LinearAlgebra -> "linalg"
+    Mode.Calculus -> "calculus"
+    Mode.Series -> "series"
+    Mode.Complex -> "complex"
+    else -> null
+}
+
+/** The operation a math tool opens with. */
+private fun Mode.firstOperation(): String = when (this) {
+    Mode.LinearAlgebra -> "rref"
+    Mode.Calculus -> "integral"
+    Mode.Series -> "taylor"
+    Mode.Complex -> "evaluate"
+    else -> ""
 }
 
 class SolverViewModel(app: Application) : AndroidViewModel(app) {
@@ -145,6 +167,19 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
     var pdeTime by mutableStateOf(0f)
     var pdePlaying by mutableStateOf(false)
 
+    /** Math tools: the chosen operation (rref, det, integral, taylor, roots, ...). */
+    var toolOp by mutableStateOf("")
+        private set
+
+    /** Switches a math tool to another operation; its small boxes start empty. */
+    fun chooseTool(operation: String) {
+        if (operation == toolOp) return
+        toolOp = operation
+        x0 = ""; y0 = ""
+        inputError = null
+        refreshPreview()
+    }
+
     /** True when the screen has a second expression field (y' of a system, left half of f, g of a wave). */
     private val twoFields: Boolean
         get() = mode == Mode.Systems || mode == Mode.Fourier || mode == Mode.Pde
@@ -181,6 +216,7 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
 
     private val previewKind: String
         get() = when {
+            mode.toolName() != null -> mode.toolName() + ":" + toolOp
             mode == Mode.Systems -> "system"
             mode == Mode.Fourier -> "fourier"
             mode == Mode.Pde -> when {
@@ -213,6 +249,7 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
             pointA = ""; pointB = ""; valueA = ""; valueB = ""
             slopeAtA = false; slopeAtB = false
             pdeT1 = ""; pdeT2 = ""
+            toolOp = newMode.firstOperation()
             previewLatex = ""; previewError = null; previewOrder = 1; inputError = null
         }
         screen = Screen.Input
@@ -301,6 +338,7 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
             Mode.Boundary -> if (eigenMode) "eigen" else "boundary"
             // "laplace" alone already names the Laplace-transform section.
             Mode.Pde -> if (pdeKind == "laplace") "laplace_eq" else pdeKind
+            Mode.LinearAlgebra, Mode.Calculus, Mode.Series, Mode.Complex -> mode.toolName() ?: "first"
         }
 
     /** Every input box of the current section, by the names [restore] understands. */
@@ -317,6 +355,10 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
                 fields["h"] = stepSize; fields["n"] = stepCount
             }
             Mode.Laplace -> {}
+            Mode.LinearAlgebra, Mode.Calculus, Mode.Series, Mode.Complex -> {
+                fields["op"] = toolOp
+                fields["x0"] = x0; fields["y0"] = y0
+            }
             Mode.Systems -> {
                 fields["equation2"] = equation2.text
                 fields["equation3"] = equation3.text
@@ -378,6 +420,9 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
             "disk" -> "Disk: u = ${equation.text} on r = $x0"
             else -> "Heat: f = ${equation.text},  L = $x0,  k = $y0"
         }
+        Mode.LinearAlgebra, Mode.Calculus, Mode.Series, Mode.Complex ->
+            "$toolOp: " + equation.text.replace("\n", "; ") +
+                (if (x0.isNotBlank()) ",  $x0" else "") + (if (y0.isNotBlank()) ",  $y0" else "")
         Mode.FirstOrder, Mode.SecondOrder -> equation.text +
             (if (x0.isNotBlank()) ",  y($x0) = $y0" else "") +
             (if (isSecondOrder && yPrime0.isNotBlank()) ",  y'($x0) = $yPrime0" else "")
@@ -416,9 +461,15 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
                 "fourier" -> Mode.Fourier
                 "boundary", "eigen" -> Mode.Boundary
                 "heat", "wave", "laplace_eq", "characteristics", "classify", "fd", "disk" -> Mode.Pde
+                "linalg" -> Mode.LinearAlgebra
+                "calculus" -> Mode.Calculus
+                "series" -> Mode.Series
+                "complex" -> Mode.Complex
                 else -> Mode.FirstOrder
             }
         )
+        // A math tool: pick its operation before the boxes are filled (choosing clears them).
+        if (mode.toolName() != null) fields["op"]?.let { chooseTool(it) }
         chooseInverse(key == "inverse")
         chooseEigen(key == "eigen")
         val pdeProblem = key == "heat" || key == "wave" || key == "laplace_eq" || key in PDE_TOOLS
@@ -472,7 +523,10 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
         solving = true
         inputError = null
         viewModelScope.launch {
-            val (json, parsed) = if (mode == Mode.Numerical) {
+            val mathTool = mode.toolName()
+            val (json, parsed) = if (mathTool != null) {
+                Engine.tool(getApplication(), mathTool, toolOp, equation.text, x0, y0)
+            } else if (mode == Mode.Numerical) {
                 Engine.numeric(getApplication(), equation.text, x0, y0, stepSize, stepCount)
             } else if (mode == Mode.Laplace) {
                 Engine.transform(getApplication(), equation.text, inverse)

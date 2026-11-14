@@ -36,6 +36,8 @@ _FUNCTIONS = {
     "sqrt": sp.sqrt, "abs": sp.Abs,
     # Unit step u(t - a) and impulse delta(t - a), used with Laplace transforms.
     "u": sp.Heaviside, "delta": sp.DiracDelta,
+    # Written n! in the series tool, which rewrites it to factorial(n) before parsing.
+    "factorial": sp.factorial,
 }
 _CONSTANTS = {"pi": sp.pi}
 
