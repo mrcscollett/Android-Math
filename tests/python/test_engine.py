@@ -2316,6 +2316,366 @@ def test_recurrence_limits_and_errors():
         "a_{n+2} - 3 a_{n+1} + 2 a_{n} = n + 2"
 
 
+# ---- math tools 3: stability and dynamics, vector calculus -----------------
+
+def _rk4_plane(f, g, start, h, steps):
+    """Hand RK4 for x' = f(x, y), y' = g(x, y); returns the list of states."""
+    state, out = list(start), [tuple(start)]
+    for _ in range(steps):
+        def d(v):
+            return [f(*v), g(*v)]
+        k1 = d(state)
+        k2 = d([a + h / 2 * b for a, b in zip(state, k1)])
+        k3 = d([a + h / 2 * b for a, b in zip(state, k2)])
+        k4 = d([a + h * b for a, b in zip(state, k3)])
+        state = [a + h / 6 * (p + 2 * q + 2 * u + w) for a, p, q, u, w in zip(state, k1, k2, k3, k4)]
+        out.append(tuple(state))
+    return out
+
+
+def _plane_field(r):
+    f = sp.lambdify((X, Y), sp.sympify(r["field"]["f"], locals={"x": X, "y": Y}), "math")
+    g = sp.lambdify((X, Y), sp.sympify(r["field"]["g"], locals={"x": X, "y": Y}), "math")
+    return f, g
+
+
+@pytest.mark.parametrize("system,verdict,linear_applies", [
+    ("y; -x - y", "asymptotically stable", True),
+    ("-x^3; -y^3", "asymptotically stable", False),
+    ("-y - x^3; x - y^3", "asymptotically stable", False),
+    ("y; -x", "is stable", False),
+    ("x + y; y", "unstable", True),
+    ("x^3; y^3", "unstable", False),
+])
+def test_lyapunov_conclusions(system, verdict, linear_applies):
+    r = _tool("dynamics", "lyapunov", system)
+    assert r["ok"], r.get("error")
+    quad = method(r, "quadratic")
+    assert quad["applicable"] and verdict in quad["particular_latex"]
+    assert method(r, "linear")["applicable"] is linear_applies
+    assert r["graph"] == "phase" and r["equilibria"][0]["x"] == 0.0
+    # Independent check: follow a nearby trajectory with RK4.
+    f, g = _plane_field(r)
+    # Long enough for slow (cubic) decay, short enough that growth does not overflow.
+    path = _rk4_plane(f, g, (0.2, 0.1), 0.01, 1000 if verdict == "unstable" else 10000)
+    start, end = math.hypot(*path[0]), math.hypot(*path[-1])
+    if verdict == "asymptotically stable":
+        assert end < 0.6 * start
+    elif verdict == "unstable":
+        assert max(math.hypot(*p) for p in path) > 1.5 * start
+    else:
+        assert abs(end - start) < 1e-6
+
+
+def test_lyapunov_derivative_matches_trajectory():
+    from deengine import dynamics
+    f, g = dynamics._system("-y - x^3; x - y^3")
+    V = dynamics._candidates(f, g, (sp.Integer(0), sp.Integer(0)))[0][1]
+    vdot = sp.lambdify((dynamics.X, dynamics.Y), sp.diff(V, dynamics.X) * f + sp.diff(V, dynamics.Y) * g, "math")
+    vf = sp.lambdify((dynamics.X, dynamics.Y), V, "math")
+    ff = sp.lambdify((dynamics.X, dynamics.Y), f, "math")
+    gg = sp.lambdify((dynamics.X, dynamics.Y), g, "math")
+    h = 1e-3
+    path = _rk4_plane(ff, gg, (0.5, -0.3), h, 400)
+    for k in (50, 200, 350):
+        numeric = (vf(*path[k + 1]) - vf(*path[k - 1])) / (2 * h)
+        assert abs(numeric - vdot(*path[k])) < 1e-5
+        assert vdot(*path[k]) < 0
+
+
+def test_lyapunov_semidefinite_and_given_function():
+    r = _tool("dynamics", "lyapunov", "y; -sin(x) - y", "y^2/2 + 1 - cos(x)")
+    given = method(r, "given")
+    assert "is stable" in given["particular_latex"]              # V' = -y^2 is only semidefinite
+    assert "negative semidefinite" in " ".join(s["text"] for s in given["steps"])
+    assert "asymptotically stable" in method(r, "quadratic")["particular_latex"]
+    none = _tool("dynamics", "lyapunov", "y - x^3; -x^3")
+    assert not any(m["applicable"] for m in none["methods"]) and "None of the tests" in none["summary"]
+    bad = _tool("dynamics", "lyapunov", "y; -x", "x*y")
+    assert "inconclusive" in method(bad, "given")["particular_latex"]
+    shifted = _tool("dynamics", "lyapunov", "x(1-x-y); y(2-x-y)", "", "0, 2")
+    assert shifted["ok"] and shifted["equilibria"][0]["y"] == 2.0
+    assert "not an equilibrium" in _tool("dynamics", "lyapunov", "x + 1; y", "", "0, 0")["error"]
+    assert "semicolon" in _tool("dynamics", "lyapunov", "x + y")["error"]
+
+
+def test_conservative_systems():
+    pend = _tool("dynamics", "conservative", "-sin(x)")
+    assert {(round(e["x"], 6), e["label"]) for e in pend["equilibria"]} == {(0.0, "center"), (round(math.pi, 6), "saddle point")}
+    well = _tool("dynamics", "conservative", "x - x^3")
+    assert [(e["x"], e["label"]) for e in well["equilibria"]] == [(-1.0, "center"), (0.0, "saddle point"), (1.0, "center")]
+    assert method(well, "energy")["verified"] is True
+    # Energy E = y^2/2 + x^4/4 - x^2/2 stays constant along an RK4 trajectory.
+    f, g = _plane_field(well)
+    energy = lambda p: p[1] ** 2 / 2 + p[0] ** 4 / 4 - p[0] ** 2 / 2
+    path = _rk4_plane(f, g, (0.5, 0.4), 0.005, 4000)
+    assert max(abs(energy(p) - energy(path[0])) for p in path) < 1e-8
+    assert "Enter" in _tool("dynamics", "conservative", "")["error"]
+
+
+def test_limit_cycles():
+    r = _tool("dynamics", "cycles", "x - y - x(x^2+y^2); x + y - y(x^2+y^2)")
+    polar = method(r, "polar")
+    assert "r = 1\\ \\text{(stable)}" in polar["particular_latex"] and polar["verified"] is True
+    assert polar["plot"]["x_expr"] == "cos(x)" and r["legends"]["exact"] == "Limit cycle"
+    f, g = _plane_field(r)
+    for start in ((0.1, 0.0), (2.0, 0.0)):
+        end = _rk4_plane(f, g, start, 0.01, 3000)[-1]
+        assert abs(math.hypot(*end) - 1.0) < 1e-3
+    two = _tool("dynamics", "cycles", "-y + x(1 - x^2 - y^2)(4 - x^2 - y^2); x + y(1 - x^2 - y^2)(4 - x^2 - y^2)")
+    assert "r = 1\\ \\text{(stable)},\\quad r = 2\\ \\text{(unstable)}" in method(two, "polar")["particular_latex"]
+    none = _tool("dynamics", "cycles", "-x + y^3; -y - x^3")
+    assert "No closed orbits" in method(none, "bendixson")["particular_latex"]
+    assert method(none, "polar")["applicable"] is False
+    centre = _tool("dynamics", "cycles", "y; -x")
+    assert "no information" in method(centre, "bendixson")["particular_latex"]
+    assert "No circular limit cycle" in method(centre, "polar")["particular_latex"]
+
+
+def test_van_der_pol_by_lienard():
+    r = _tool("dynamics", "cycles", "y; -x + (1 - x^2) y")
+    assert "Exactly one limit cycle" in method(r, "lienard")["particular_latex"]
+    f, g = _plane_field(r)
+    path = _rk4_plane(f, g, (0.1, 0.0), 0.01, 6000)
+    amplitude = max(abs(p[0]) for p in path[-1500:])
+    assert 1.95 < amplitude < 2.05          # the van der Pol cycle has amplitude about 2
+    damped = _tool("dynamics", "cycles", "y; -x - y")
+    assert "no conclusion" in method(damped, "lienard")["particular_latex"]
+
+
+@pytest.mark.parametrize("text,kinds", [
+    ("m - x^2", {0.0: "saddle-node"}),
+    ("m x - x^2", {0.0: "transcritical"}),
+    ("m x - x^3", {0.0: "supercritical pitchfork"}),
+    ("mu x + x^3", {0.0: "subcritical pitchfork"}),
+    ("m + x - x^3", {-2 * math.sqrt(3) / 9: "saddle-node", 2 * math.sqrt(3) / 9: "saddle-node"}),
+    ("x(m - x + x^2)", {0.0: "transcritical", 0.25: "saddle-node"}),
+])
+def test_bifurcation_types(text, kinds):
+    r = _tool("dynamics", "bifurcation", text)
+    assert r["ok"], r.get("error")
+    table = next(s for s in method(r, "branches")["steps"] if s["title"].startswith("Locate"))["table"]
+    found = {}
+    for row in table["rows"]:
+        value = float(sp.sympify(row[0].replace("\\frac{2 \\sqrt{3}}{9}", "2*sqrt(3)/9").replace("- ", "-")
+                                 .replace("\\frac{1}{4}", "1/4")))
+        found[round(value, 9)] = row[2].replace("\\text{", "").rstrip("}")
+    assert found == {round(k, 9): v for k, v in kinds.items()}
+    # Every plotted equilibrium really is one, and its label matches the sign of f_x.
+    from deengine import dynamics
+    f = dynamics._expr(text, ["x", "m"], "f")
+    fn = sp.lambdify((dynamics.X, dynamics.M), f, "math")
+    fx = sp.lambdify((dynamics.X, dynamics.M), sp.diff(f, dynamics.X), "math")
+    assert len(r["equilibria"]) >= 10
+    for e in r["equilibria"]:
+        assert abs(fn(e["y"], e["x"])) < 1e-7
+        slope = fx(e["y"], e["x"])
+        if abs(slope) > 1e-6:
+            assert e["label"] == ("stable" if slope < 0 else "unstable")
+    assert r["field"]["f"] == "0*x" and "parameter m" in r["legends"]["hint"]
+
+
+def test_bifurcation_and_hopf_edges():
+    assert "No bifurcation" in method(_tool("dynamics", "bifurcation", "m - e^x + 1"), "branches")["particular_latex"]
+    assert "parameter" in _tool("dynamics", "bifurcation", "x^2 + 1")["error"]
+    hopf = _tool("dynamics", "hopf", "m x - y - x(x^2+y^2); x + m y - y(x^2+y^2)")
+    m = method(hopf, "hopf")
+    assert "m = 0" in m["particular_latex"] and "\\pm i" in m["particular_latex"]
+    assert "Direction, from polar coordinates" in [s["title"] for s in m["steps"]]
+    # At m = 1/2 the periodic orbit has radius sqrt(1/2).
+    xs = sp.sympify(m["plot"]["x_expr"], locals={"x": X})
+    assert abs(float(xs.subs(X, 0)) - math.sqrt(0.5)) < 1e-12
+    f, g = _plane_field(hopf)
+    end = _rk4_plane(f, g, (0.05, 0.0), 0.01, 4000)[-1]
+    assert abs(math.hypot(*end) - math.sqrt(0.5)) < 1e-3
+    vdp = _tool("dynamics", "hopf", "y; -x + (m - x^2) y", "2")
+    assert "m = 0" in method(vdp, "hopf")["particular_latex"] and "m = 2" in vdp["summary"]
+    assert "not tell" in " ".join(s["text"] for s in method(vdp, "hopf")["steps"])
+    assert "No Hopf" in method(_tool("dynamics", "hopf", "m x; -y"), "hopf")["particular_latex"]
+    assert "parameter" in _tool("dynamics", "hopf", "x; y")["error"]
+
+
+def _central(fn, point, index, h=1e-5):
+    up, down = list(point), list(point)
+    up[index] += h
+    down[index] -= h
+    return (fn(*up) - fn(*down)) / (2 * h)
+
+
+def test_vector_operators_match_finite_differences():
+    from deengine import vector
+    V = (vector.X, vector.Y, vector.Z)
+    F = vector._components("x^2 y + z; y z^2 - x; x y z + sin(x)", ["x", "y", "z"], "F")
+    fns = [sp.lambdify(V, c, "math") for c in F]
+    point = (0.7, -0.4, 1.3)
+    div = sum(_central(fns[i], point, i) for i in range(3))
+    curl = [_central(fns[2], point, 1) - _central(fns[1], point, 2), _central(fns[0], point, 2) - _central(fns[2], point, 0),
+            _central(fns[1], point, 0) - _central(fns[0], point, 1)]
+    got_curl = [float(c.subs(dict(zip(V, point)))) for c in vector._curl(F, V)]
+    assert all(abs(a - b) < 1e-6 for a, b in zip(curl, got_curl))
+    r = _tool("vector", "divcurl", "x^2 y + z; y z^2 - x; x y z + sin(x)")
+    shown = method(r, "operators")["steps"][0]["latex"][1].split(" = ", 1)[1]
+    assert shown == sp.latex(sp.sympify("2*x*y + z**2 + x*y"), ln_notation=True)
+    assert abs(float(sp.sympify("2*x*y + z**2 + x*y").subs({"x": 0.7, "y": -0.4, "z": 1.3})) - div) < 1e-6
+    # Identities: curl grad = 0 and div curl = 0.
+    for text in ("x^2 y z + sin(x y)", "x^3 - 3 x y^2 + z^4"):
+        f = vector._expr(text, ["x", "y", "z"], "f")
+        assert all(c == 0 for c in vector._curl([sp.diff(f, v) for v in V], V))
+    for text in ("x^2 y; y^2 z; z^2 x", "sin(y); x z; x y^2"):
+        G = vector._curl(vector._components(text, ["x", "y", "z"], "F"), V)
+        assert sp.simplify(sum(sp.diff(c, v) for c, v in zip(G, V))) == 0
+
+
+def test_gradient_and_directional_derivative():
+    r = _tool("vector", "gradient", "x^2 y + sin(y)", "1, 0", "3, 4")
+    m = method(r, "partials")
+    fn = lambda x, y: x ** 2 * y + math.sin(y)
+    gx, gy = _central(fn, (1.0, 0.0), 0), _central(fn, (1.0, 0.0), 1)
+    text = " ".join(l for s in m["steps"] for l in s["latex"])
+    assert "\\nabla f(1,\\ 0) = \\left\\langle 0,\\ 2 \\right\\rangle" in text
+    assert abs(gx - 0) < 1e-8 and abs(gy - 2) < 1e-8
+    assert "D_{\\mathbf{u}} f = \\nabla f \\cdot \\mathbf{u} = \\frac{8}{5}" in text      # (0, 2).(3, 4)/5
+    assert "z = 2 y" in text                                                            # tangent plane
+    assert r["graph"] == "surface" and r["surface"] is True
+    d = r["domain"]
+    assert d["x_min"] == -2.0 and d["x_max"] == 4.0 and d["u_min"] < d["u_max"]
+    assert m["plot"]["particular_expr"] == "x**2*y + sin(y)"
+    three = _tool("vector", "gradient", "x y z + z^2", "1, 2, 3", "1, 0, 0")
+    assert three["ok"] and "graph" not in three
+    assert "= 6" in " ".join(l for s in method(three, "partials")["steps"] for l in s["latex"])
+    assert "point as well" in _tool("vector", "gradient", "x^2", "", "1, 0")["error"]
+    assert "zero vector" in _tool("vector", "gradient", "x^2 + y", "1, 1", "0, 0")["error"]
+
+
+def test_potential_functions():
+    from deengine import vector
+    for text, names in (("2x y; x^2 + 3y^2", ["x", "y"]), ("y z; x z; x y", ["x", "y", "z"]),
+                        ("e^x cos(y) + y z; x z - e^x sin(y); x y + z", ["x", "y", "z"])):
+        F = vector._components(text, names, "F")
+        V = [vector._SYMBOL[n] for n in names]
+        phi = vector._potential(F, V)
+        assert phi is not None and all(sp.simplify(sp.diff(phi, v) - c) == 0 for v, c in zip(V, F))
+        assert method(_tool("vector", "divcurl", text), "potential")["verified"] is True
+    assert method(_tool("vector", "divcurl", "-y; x"), "potential")["applicable"] is False
+    assert _tool("vector", "divcurl", "-y; x")["graph"] == "phase"
+    assert "components" in _tool("vector", "divcurl", "x")["error"]
+
+
+@pytest.mark.parametrize("field,curve,limits,expected", [
+    ("-y; x", "cos(t); sin(t)", "0, 2pi", 2 * math.pi),
+    ("2x y; x^2 + 3y^2", "t; t^2", "0, 1", 2.0),
+    ("2x y; x^2 + 3y^2", "t; t", "0, 1", 2.0),              # same end points: path independent
+    ("y z; x z; x y", "t; t^2; t^3", "0, 1", 1.0),
+    ("x^2; x y", "t; 2t", "0, 1", None),
+    ("x + y", "cos(t); sin(t)", "0, pi/2", 2.0),
+    ("x y", "t; t^2", "0, 1", None),
+])
+def test_line_integrals_match_quadrature(field, curve, limits, expected):
+    from deengine import vector
+    r = _tool("vector", "line", field, curve, limits)
+    assert r["ok"], r.get("error")
+    comps = vector._components(curve, ["t"], "r")
+    names = ["x", "y", "z"][:len(comps)]
+    parts = vector._split(field)
+    a, b = [float(sp.sympify(v.replace("pi", "*pi") if v.strip()[0].isdigit() and "pi" in v else v))
+            for v in limits.split(",")]
+    cf = [sp.lambdify(vector.T, c, "mpmath") for c in comps]
+    df = [sp.lambdify(vector.T, sp.diff(c, vector.T), "mpmath") for c in comps]
+    variables = [vector._SYMBOL[n] for n in names]
+    if len(parts) == 1:
+        f = sp.lambdify(variables, vector._expr(parts[0], names, "f"), "mpmath")
+        reference = mpmath.quad(lambda t: f(*[c(t) for c in cf]) * mpmath.sqrt(sum(d(t) ** 2 for d in df)), [a, b])
+    else:
+        F = [sp.lambdify(variables, vector._expr(p, names, "F"), "mpmath") for p in parts]
+        reference = mpmath.quad(lambda t: sum(Fi(*[c(t) for c in cf]) * d(t) for Fi, d in zip(F, df)), [a, b])
+    for m in r["methods"]:
+        if m["applicable"]:
+            assert abs(m["value"] - float(reference)) < 1e-8, (m["id"], m["value"], reference)
+            assert m["verified"] is True
+    if expected is not None:
+        assert abs(float(reference) - expected) < 1e-9
+    if field.startswith("2x y"):
+        assert method(r, "fundamental")["applicable"]
+    if len(comps) == 2:
+        assert r["graph"] == "phase"
+        # The drawn curve stops at the end points of the parameter interval.
+        xs = sp.sympify(r["methods"][0]["plot"]["x_expr"], locals={"x": X})
+        assert abs(float(xs.subs(X, b + 5)) - float(xs.subs(X, b))) < 1e-12
+
+
+def test_line_integral_errors():
+    assert "must match" in _tool("vector", "line", "y; x", "t; t; t", "0, 1")["error"]
+    assert "curve" in _tool("vector", "line", "y; x", "", "0, 1")["error"]
+    assert "limits" in _tool("vector", "line", "y; x", "t; t", "")["error"]
+
+
+@pytest.mark.parametrize("op,text,a,b,ref", [
+    ("double", "x y", "0, 1", "0, x", lambda: mpmath.quad(lambda x: mpmath.quad(lambda y: x * y, [0, x]), [0, 1])),
+    ("double", "x^2 + y", "0, 2", "1, 3", lambda: mpmath.quad(lambda x, y: x ** 2 + y, [0, 2], [1, 3])),
+    ("double", "x + y", "0, 1", "x^2, x", lambda: mpmath.quad(lambda x: mpmath.quad(lambda y: x + y, [x ** 2, x]), [0, 1])),
+    ("double", "e^(x+y)", "0, 1", "0, 1", lambda: (mpmath.e - 1) ** 2),
+    ("polar", "x^2 + y^2", "0, 2", "0, 2pi", lambda: 8 * mpmath.pi),
+    ("polar", "e^(-x^2-y^2)", "0, 1", "0, pi", lambda: mpmath.pi / 2 * (1 - mpmath.exp(-1))),
+    ("polar", "x", "0, 1", "0, pi/2", lambda: mpmath.mpf(1) / 3),
+])
+def test_double_integrals(op, text, a, b, ref):
+    r = _tool("vector", op, text, a, b)
+    assert r["ok"], r.get("error")
+    want = float(ref())
+    tolerance = 1e-8
+    for m in r["methods"]:
+        if m["applicable"]:
+            assert abs(m["value"] - want) < tolerance * (1 + abs(want)), (m["id"], m["value"], want)
+    if op == "double" and "x" not in b:
+        assert method(r, "swapped")["applicable"]
+    assert "limits" in _tool("vector", op, text, "", "")["error"]
+
+
+@pytest.mark.parametrize("field,region,expected", [
+    ("-y; x", "2", 8 * math.pi),                       # 2 * area
+    ("x y; x^2", "0, 1, 0, 2", 1.0),
+    ("-y^3; x^3", "1, 2", 45 * math.pi / 2),           # 3 * integral of r^2 over the ring
+    ("x^2 - y; x + y^2", "0, 3, 1, 2", 6.0),           # curl = 2, area 3
+    ("e^x; e^y", "1", 0.0),                            # conservative
+])
+def test_greens_theorem_both_sides(field, region, expected):
+    r = _tool("vector", "green", field, region)
+    assert r["ok"], r.get("error")
+    green, direct = method(r, "green"), method(r, "direct")
+    assert green["verified"] is True and direct["verified"] is True
+    assert abs(green["value"] - expected) < 1e-9 and abs(direct["value"] - expected) < 1e-9
+    assert "region" in _tool("vector", "green", field, "1, 2, 3")["error"].lower()
+
+
+@pytest.mark.parametrize("op,field,surface,expected", [
+    ("flux", "x; y; z", "sphere 2", 32 * math.pi),             # 3 * volume
+    ("flux", "x^2; y^2; z^2", "box 1, 2, 3", 36.0),
+    ("flux", "x y; y z; z x", "cylinder 1, 2", 2 * math.pi),
+    ("flux", "x^3; y^3; z^3", "sphere 1", 12 * math.pi / 5),
+    ("flux", "y; -x; 0*z", "cylinder 2, 1", 0.0),
+    ("stokes", "-y; x; z", "hemisphere 1", 2 * math.pi),
+    ("stokes", "z; x; y", "paraboloid 2", 4 * math.pi),
+    ("stokes", "y^2; x; z^2", "disk 3", 9 * math.pi),
+    ("stokes", "-y^3; x^3; z", "hemisphere 2", 24 * math.pi),  # 3 * integral of r^2 over the disc
+])
+def test_flux_and_stokes_two_ways(op, field, surface, expected):
+    r = _tool("vector", op, field, surface)
+    assert r["ok"], r.get("error")
+    values = [m["value"] for m in r["methods"]]
+    assert len(values) == 2 and all(m["verified"] is True for m in r["methods"])
+    assert all(abs(v - expected) < 1e-9 * (1 + abs(expected)) for v in values)
+
+
+def test_surface_errors_and_previews():
+    assert "Supported here" in _tool("vector", "flux", "x; y; z", "cone 1")["error"]
+    assert "positive" in _tool("vector", "flux", "x; y; z", "sphere -1")["error"]
+    assert "3 components" in _tool("vector", "stokes", "x; y", "disk 1")["error"]
+    assert json.loads(preview("y; -x", "dynamics:lyapunov"))["latex"] == "x' = y,\\qquad y' = - x"
+    assert json.loads(preview("mu x - x^3", "dynamics:bifurcation"))["latex"] == "x' = m x - x^{3}"
+    assert json.loads(preview("x; y; z", "vector:flux"))["latex"].startswith("\\mathbf{F}")
+    assert not json.loads(preview("q", "vector:gradient"))["ok"]
+
+
 def test_export_fixtures():
     """Write sample outputs used by the Kotlin contract tests."""
     import os
@@ -2374,6 +2734,10 @@ def test_export_fixtures():
         "tool_bessel.json": ("special", "bessel", "0"),
         "tool_ftransform.json": ("ftransform", "heat", "u(x+1) - u(x-1)", "1"),
         "tool_recurrence.json": ("recurrence", "solve", "a(n+2) = a(n+1) + a(n)", "0, 1"),
+        "tool_dynamics.json": ("dynamics", "cycles", "x - y - x(x^2+y^2); x + y - y(x^2+y^2)"),
+        "tool_bifurcation.json": ("dynamics", "bifurcation", "m x - x^3"),
+        "tool_vector.json": ("vector", "line", "-y; x", "cos(t); sin(t)", "0, pi"),
+        "tool_gradient.json": ("vector", "gradient", "x^2 - y^2", "1, 1"),
     }.items():
         with open(os.path.join(out, name), "w") as fh:
             fh.write(tool(*args))

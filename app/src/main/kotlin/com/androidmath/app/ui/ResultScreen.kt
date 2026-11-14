@@ -120,9 +120,9 @@ fun ResultScreen(model: SolverViewModel) {
                     script = "showSolution(${jsString(model.resultJson)}, ${jsString(method?.id ?: "")});",
                     modifier = Modifier.fillMaxSize(),
                 )
-            } else if (result.kind == "system") {
+            } else if (result.kind == "system" || result.graph == "phase") {
                 PhaseTab(model)
-            } else if (result.kind == "pde") {
+            } else if (result.kind == "pde" || result.graph == "surface") {
                 PdeTab(model)
             } else {
                 GraphTab(model)
@@ -334,13 +334,15 @@ private fun PhaseTab(model: SolverViewModel) {
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (exactX != null && exactY != null) {
-                    Legend(MaterialTheme.colorScheme.primary, "Exact solution")
+                    Legend(MaterialTheme.colorScheme.primary, result.legends["exact"] ?: "Exact solution")
                     Spacer(Modifier.width(16.dp))
                 }
-                if (result.field != null) Legend(MaterialTheme.colorScheme.tertiary, "Trajectories")
+                if (result.field != null) {
+                    Legend(MaterialTheme.colorScheme.tertiary, result.legends["trajectories"] ?: "Trajectories")
+                }
                 if (result.equilibria.isNotEmpty()) {
                     Spacer(Modifier.width(16.dp))
-                    Legend(MaterialTheme.colorScheme.error, "Equilibria")
+                    Legend(MaterialTheme.colorScheme.error, result.legends["equilibria"] ?: "Equilibria")
                 }
                 Spacer(Modifier.weight(1f))
                 if (model.tappedPoints.isNotEmpty()) {
@@ -349,7 +351,8 @@ private fun PhaseTab(model: SolverViewModel) {
                 TextButton(onClick = { model.viewResetKey++ }) { Text("Reset view") }
             }
             Text(
-                if (result.field == null) {
+                // A math tool may describe its own picture.
+                result.legends["hint"] ?: if (result.field == null) {
                     "The curve is the solution (x(t), y(t)) for the given initial values. " +
                         "Drag to move, pinch to zoom."
                 } else {

@@ -33,6 +33,13 @@ data class SolveResult(
      * app: "exact" for the main curve and "points" for the plotted points.
      */
     val legends: Map<String, String> = emptyMap(),
+    /**
+     * Which graph a math-tool result wants when the default curve view does not
+     * fit: "phase" for a direction field in the plane (uses [field],
+     * [equilibria] and the method's x/y curve), "surface" for a heat map of a
+     * function of x and y (uses [domain]). Empty for the default.
+     */
+    val graph: String = "",
     /** For kind "pde": heat, wave, laplace, characteristics, classify, fd or disk. */
     val pde: String = "",
     /** For PDEs: the region the solution is drawn on and its range of values. */

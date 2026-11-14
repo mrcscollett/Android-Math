@@ -578,4 +578,57 @@ class PdeTest {
         assertEquals(55.0, terms[2 * 10 + 1], 1e-9)
         assertEquals("Terms of the sequence", fibonacci.legends["points"])
     }
+
+    @Test fun parsesDynamicsAndVectorTools() {
+        // A limit cycle: direction field, equilibrium, and the cycle as a parametric curve.
+        val cycles = EngineJson.solveResult(fixture("tool_dynamics.json"))
+        assertEquals("tool", cycles.kind)
+        assertEquals("phase", cycles.graph)
+        assertEquals("Limit cycle", cycles.legends["exact"])
+        val f = Expr.parseOrNull(cycles.field!!.f)!!
+        val g = Expr.parseOrNull(cycles.field!!.g)!!
+        // On the unit circle the radial part vanishes: the field is (-y, x).
+        assertEquals(-1.0, f.eval(0.0, 1.0, 0.0), 1e-12)
+        assertEquals(1.0, g.eval(1.0, 0.0, 0.0), 1e-12)
+        val polar = cycles.applicableMethods.first { it.id == "polar" }
+        val cx = Expr.parseOrNull(polar.plot!!.xExpr)!!
+        val cy = Expr.parseOrNull(polar.plot!!.yExpr)!!
+        assertEquals(1.0, kotlin.math.hypot(cx.eval(0.7, 0.0, 0.0), cy.eval(0.7, 0.0, 0.0)), 1e-12)
+        // A trajectory started inside spirals out to the cycle.
+        val orbit = Ode.trajectory(f, g, 0.2, 0.0, -3.0, 3.0, -3.0, 3.0, maxSteps = 4000)
+        val last = orbit.size - 2
+        assertEquals(1.0, kotlin.math.hypot(orbit[last], orbit[last + 1]), 2e-2)
+
+        // A bifurcation diagram: parameter across, x up, flow arrows vertical.
+        val pitchfork = EngineJson.solveResult(fixture("tool_bifurcation.json"))
+        assertEquals("phase", pitchfork.graph)
+        assertEquals(0.0, Expr.parseOrNull(pitchfork.field!!.f)!!.eval(1.0, 2.0, 0.0), 0.0)
+        val flow = Expr.parseOrNull(pitchfork.field!!.g)!!
+        assertEquals(1.0 * 0.5 - 0.125, flow.eval(1.0, 0.5, 0.0), 1e-12)      // m x - x^3 at m = 1, x = 0.5
+        assertTrue(pitchfork.equilibria.any { it.label == "stable" && it.x > 0 && it.y > 0 })
+        assertTrue(pitchfork.equilibria.any { it.label == "unstable" && it.x > 0 && it.y == 0.0 })
+        assertTrue(pitchfork.legends["hint"]!!.contains("parameter m"))
+
+        // A line integral: the field and the curve, which stops at the ends of the interval.
+        val line = EngineJson.solveResult(fixture("tool_vector.json"))
+        assertEquals("phase", line.graph)
+        assertEquals("The curve r(t)", line.legends["exact"])
+        val rx = Expr.parseOrNull(line.applicableMethods[0].plot!!.xExpr)!!
+        assertEquals(-1.0, rx.eval(kotlin.math.PI, 0.0, 0.0), 1e-12)
+        assertEquals(-1.0, rx.eval(9.0, 0.0, 0.0), 1e-12)
+        assertEquals(1.0, rx.eval(-4.0, 0.0, 0.0), 1e-12)
+
+        // A scalar field drawn as a heat map.
+        val gradient = EngineJson.solveResult(fixture("tool_gradient.json"))
+        assertEquals("surface", gradient.graph)
+        assertTrue(gradient.surface)
+        val domain = gradient.domain!!
+        assertEquals(-2.0, domain.xMin, 0.0)
+        assertEquals(4.0, domain.yMax, 0.0)
+        val u = Expr.parseOrNull(gradient.applicableMethods.single().plot!!.particularExpr)!!
+        assertEquals(3.0, u.eval(2.0, 1.0, 0.0), 1e-12)
+        val cells = Plot.heatMap(u, domain.xMin, domain.xMax, domain.yMin, domain.yMax, 6, 6, domain.uMin, domain.uMax)
+        assertEquals(36, cells.size)
+        assertTrue(cells.all { it in 0f..1f })
+    }
 }

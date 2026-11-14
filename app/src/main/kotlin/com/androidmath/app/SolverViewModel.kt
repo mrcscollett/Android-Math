@@ -39,6 +39,8 @@ enum class Mode(val title: String) {
     Special("Special functions"),
     FourierTransform("Fourier transforms"),
     Recurrence("Difference equations"),
+    Dynamics("Stability and dynamics"),
+    Vector("Vector calculus"),
 }
 
 /** The engine's name for a math-tool section, or null for the other sections. */
@@ -50,6 +52,8 @@ fun Mode.toolName(): String? = when (this) {
     Mode.Special -> "special"
     Mode.FourierTransform -> "ftransform"
     Mode.Recurrence -> "recurrence"
+    Mode.Dynamics -> "dynamics"
+    Mode.Vector -> "vector"
     else -> null
 }
 
@@ -62,6 +66,8 @@ private fun Mode.firstOperation(): String = when (this) {
     Mode.Special -> "bessel"
     Mode.FourierTransform -> "forward"
     Mode.Recurrence -> "solve"
+    Mode.Dynamics -> "lyapunov"
+    Mode.Vector -> "gradient"
     else -> ""
 }
 
@@ -348,7 +354,7 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
             // "laplace" alone already names the Laplace-transform section.
             Mode.Pde -> if (pdeKind == "laplace") "laplace_eq" else pdeKind
             Mode.LinearAlgebra, Mode.Calculus, Mode.Series, Mode.Complex,
-            Mode.Special, Mode.FourierTransform, Mode.Recurrence -> mode.toolName() ?: "first"
+            Mode.Special, Mode.FourierTransform, Mode.Recurrence, Mode.Dynamics, Mode.Vector -> mode.toolName() ?: "first"
         }
 
     /** Every input box of the current section, by the names [restore] understands. */
@@ -366,7 +372,7 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
             }
             Mode.Laplace -> {}
             Mode.LinearAlgebra, Mode.Calculus, Mode.Series, Mode.Complex,
-            Mode.Special, Mode.FourierTransform, Mode.Recurrence -> {
+            Mode.Special, Mode.FourierTransform, Mode.Recurrence, Mode.Dynamics, Mode.Vector -> {
                 fields["op"] = toolOp
                 fields["x0"] = x0; fields["y0"] = y0
             }
@@ -432,7 +438,7 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
             else -> "Heat: f = ${equation.text},  L = $x0,  k = $y0"
         }
         Mode.LinearAlgebra, Mode.Calculus, Mode.Series, Mode.Complex,
-            Mode.Special, Mode.FourierTransform, Mode.Recurrence ->
+            Mode.Special, Mode.FourierTransform, Mode.Recurrence, Mode.Dynamics, Mode.Vector ->
             "$toolOp: " + equation.text.replace("\n", "; ") +
                 (if (x0.isNotBlank()) ",  $x0" else "") + (if (y0.isNotBlank()) ",  $y0" else "")
         Mode.FirstOrder, Mode.SecondOrder -> equation.text +
@@ -480,6 +486,8 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
                 "special" -> Mode.Special
                 "ftransform" -> Mode.FourierTransform
                 "recurrence" -> Mode.Recurrence
+                "dynamics" -> Mode.Dynamics
+                "vector" -> Mode.Vector
                 else -> Mode.FirstOrder
             }
         )

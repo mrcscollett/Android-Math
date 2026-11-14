@@ -121,6 +121,16 @@ private val TOOL_SECTIONS = listOf(
         "Linear recurrences such as Fibonacci: closed formulas and first terms",
         Mode.Recurrence,
     ),
+    Section(
+        "Stability and dynamics",
+        "Lyapunov functions, conservative systems, limit cycles, bifurcations",
+        Mode.Dynamics,
+    ),
+    Section(
+        "Vector calculus",
+        "Gradient, divergence, curl, line and double integrals, Green's, Stokes' and the divergence theorem",
+        Mode.Vector,
+    ),
 )
 
 private val UPCOMING_SECTIONS = listOf(

@@ -223,4 +223,20 @@ open recurrence "a(n+2)=a(n+1)+a(n)" "" "" 0 'text="Steps"' "--es mode recurrenc
 expect recurrence 'text="Difference equation"'
 expect recurrence 'Write the characteristic equation'
 
+open dynamics "y;-x-y" "" "" 0 'text="Steps"' "--es mode dynamics --es op lyapunov"
+expect dynamics 'text="Lyapunov stability"'
+expect dynamics 'Differentiate along solutions'
+
+open bifurcation "m*x-x^3" "" "" 1 'text="Graph"' "--es mode dynamics --es op bifurcation"
+expect bifurcation 'text="Bifurcation"'
+expect bifurcation 'the parameter m'
+
+open vector "-y;x" "cos(t);sin(t)" "0,2*pi" 0 'text="Steps"' "--es mode vector --es op line"
+expect vector 'text="Line integral"'
+expect vector 'Take the dot product'
+
+open gradient "x^2-y^2" "" "" 0 'text="Steps"' "--es mode vector --es op gradient"
+expect gradient 'text="Gradient"'
+expect gradient 'Form the gradient'
+
 exit $fail

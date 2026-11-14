@@ -312,6 +312,148 @@ private val RECURRENCE = listOf(
     ),
 )
 
+private val PLANE_KEYS = listOf(
+    "x", "y", ";", "^", "(", ")", "*", "/", "+", "-", "sin(", "cos(", "e^(", "sqrt(", "pi",
+)
+private val SPACE_KEYS = listOf(
+    "x", "y", "z", ";", "^", "(", ")", "*", "/", "+", "-", "sin(", "cos(", "e^(", "sqrt(", "pi",
+)
+private val PARAMETER_KEYS = listOf("x", "y", "m", ";", "^", "(", ")", "*", "/", "+", "-", "sin(", "e^(")
+
+private const val SYSTEM_HINT =
+    "Enter the right-hand sides of x' and y' separated by a semicolon, as in  y; -x - y."
+private const val FIELD_HINT =
+    "Separate the components of a vector with semicolons, as in  -y; x  or  x; y; z."
+
+private val DYNAMICS = listOf(
+    ToolOp(
+        "lyapunov", "Lyapunov", "x'; y'", "y; -x - y", "Test stability", PLANE_KEYS,
+        "$SYSTEM_HINT The app tries simple quadratic functions V. You can also enter your own " +
+            "V(x, y), and the equilibrium to study if it is not the origin (as  a, b).",
+        listOf(
+            ToolExample("Damped oscillator", "y; -x - y"),
+            ToolExample("Cubic damping", "-x^3; -y^3"),
+            ToolExample("Linearization fails", "-y - x^3; x - y^3"),
+            ToolExample("Pendulum with friction, energy as V", "y; -sin(x) - y", "y^2/2 + 1 - cos(x)"),
+            ToolExample("Unstable", "x + y; y"),
+        ),
+        box1 = "V(x, y)  (optional)", box2 = "equilibrium  a, b  (optional)", wideBox = true,
+    ),
+    ToolOp(
+        "conservative", "Conservative", "Force F(x) in x'' = F(x)", "-sin(x)", "Analyse the motion",
+        FUNCTION_KEYS,
+        "Enter the force as a function of position only. The energy, the equilibria and their " +
+            "types are found, and the Graph tab shows the phase plane (x, x').",
+        listOf(ToolExample("Pendulum", "-sin(x)"), ToolExample("Double well", "x - x^3"),
+            ToolExample("Spring", "-x"), ToolExample("Soft spring", "-x + x^3")),
+    ),
+    ToolOp(
+        "cycles", "Limit cycles", "x'; y'", "x - y - x(x^2+y^2); x + y - y(x^2+y^2)", "Look for closed orbits",
+        PLANE_KEYS,
+        "$SYSTEM_HINT Three tests are tried: Bendixson's criterion, polar coordinates, and " +
+            "Li\u00e9nard's theorem.",
+        listOf(
+            ToolExample("Circular cycle", "x - y - x(x^2+y^2); x + y - y(x^2+y^2)"),
+            ToolExample("Van der Pol", "y; -x + (1 - x^2) y"),
+            ToolExample("None possible", "-x + y^3; -y - x^3"),
+            ToolExample("Two cycles", "-y + x(1 - x^2 - y^2)(4 - x^2 - y^2); x + y(1 - x^2 - y^2)(4 - x^2 - y^2)"),
+        ),
+    ),
+    ToolOp(
+        "bifurcation", "Bifurcation", "f(x, m) in x' = f(x, m)", "m x - x^3", "Find the bifurcations",
+        PARAMETER_KEYS,
+        "Write the parameter as m. The Graph tab shows the equilibria against m, with arrows " +
+            "showing which way x moves.",
+        listOf(ToolExample("Saddle-node", "m - x^2"), ToolExample("Transcritical", "m x - x^2"),
+            ToolExample("Pitchfork", "m x - x^3"), ToolExample("Subcritical pitchfork", "m x + x^3"),
+            ToolExample("Two folds", "m + x - x^3")),
+    ),
+    ToolOp(
+        "hopf", "Hopf", "x'; y'  with parameter m", "m x - y - x(x^2+y^2); x + m y - y(x^2+y^2)",
+        "Find the Hopf bifurcation", PARAMETER_KEYS,
+        "$SYSTEM_HINT Write the parameter as m. The box sets the value of m used for the phase " +
+            "plane on the Graph tab.",
+        listOf(
+            ToolExample("Normal form", "m x - y - x(x^2+y^2); x + m y - y(x^2+y^2)", "1"),
+            ToolExample("Van der Pol", "y; -x + (m - x^2) y", "1"),
+        ),
+        box1 = "m for the graph",
+    ),
+)
+
+private val VECTOR = listOf(
+    ToolOp(
+        "gradient", "Gradient", "f(x, y) or f(x, y, z)", "x^2 y + sin(y)", "Find the gradient", SPACE_KEYS,
+        "Give a point (as  1, 2) to evaluate there and get the tangent plane, and a direction " +
+            "(as  3, 4) for the directional derivative. Both are optional.",
+        listOf(ToolExample("With a direction", "x^2 y + sin(y)", "1, 0", "3, 4"),
+            ToolExample("Bump", "e^(-x^2-y^2)"), ToolExample("Three variables", "x y z + z^2", "1, 2, 3", "1, 0, 0")),
+        box1 = "point (optional)", box2 = "direction (optional)",
+    ),
+    ToolOp(
+        "divcurl", "Div, curl, potential", "Field  P; Q  or  P; Q; R", "2x y; x^2 + 3y^2",
+        "Find divergence and curl", SPACE_KEYS,
+        "$FIELD_HINT If the curl is zero a potential function is found as well.",
+        listOf(ToolExample("Conservative", "2x y; x^2 + 3y^2"), ToolExample("Rotation", "-y; x"),
+            ToolExample("In space", "y z; x z; x y"), ToolExample("Not conservative", "x^2; y^2; z^2 + x y")),
+    ),
+    ToolOp(
+        "line", "Line integral", "Field  P; Q  (or a single function f)", "-y; x", "Integrate along the curve",
+        SPACE_KEYS,
+        "$FIELD_HINT Give the curve by its components in t, and the two limits for t. A single " +
+            "function instead of a field is integrated with respect to arc length.",
+        listOf(
+            ToolExample("Around a circle", "-y; x", "cos(t); sin(t)", "0, 2pi"),
+            ToolExample("Conservative field", "2x y; x^2 + 3y^2", "t; t^2", "0, 1"),
+            ToolExample("Arc length integral", "x + y", "cos(t); sin(t)", "0, pi/2"),
+            ToolExample("In space", "y z; x z; x y", "t; t^2; t^3", "0, 1"),
+        ),
+        box1 = "curve  x(t); y(t)", box2 = "t from, to", wideBox = true,
+    ),
+    ToolOp(
+        "double", "Double integral", "f(x, y)", "x y", "Integrate over the region", PLANE_KEYS,
+        "Give the limits for x as two numbers and the limits for y as numbers or functions of " +
+            "x, each pair separated by a comma.",
+        listOf(ToolExample("Triangle", "x y", "0, 1", "0, x"), ToolExample("Rectangle", "x^2 + y", "0, 2", "1, 3"),
+            ToolExample("Between curves", "x + y", "0, 1", "x^2, x")),
+        box1 = "x from, to", box2 = "y from, to",
+    ),
+    ToolOp(
+        "polar", "Polar integral", "f(x, y)", "x^2 + y^2", "Integrate in polar coordinates", PLANE_KEYS,
+        "The function is rewritten in polar coordinates. Give the limits for r and for the " +
+            "angle, each as two numbers separated by a comma.",
+        listOf(ToolExample("Disc", "x^2 + y^2", "0, 2", "0, 2pi"),
+            ToolExample("Gaussian on a half disc", "e^(-x^2-y^2)", "0, 1", "0, pi"),
+            ToolExample("Ring", "1", "1, 2", "0, 2pi")),
+        box1 = "r from, to", box2 = "angle from, to",
+    ),
+    ToolOp(
+        "green", "Green's theorem", "Field  P; Q", "-y; x", "Compute both sides", PLANE_KEYS,
+        "$FIELD_HINT Describe the region with numbers: one radius for a disc centred at the " +
+            "origin, two radii for a ring, or  x1, x2, y1, y2  for a rectangle.",
+        listOf(ToolExample("Disc of radius 2", "-y; x", "2"), ToolExample("Rectangle", "x y; x^2", "0, 1, 0, 2"),
+            ToolExample("Ring", "-y^3; x^3", "1, 2")),
+        box1 = "region", wideBox = true,
+    ),
+    ToolOp(
+        "flux", "Flux", "Field  P; Q; R", "x; y; z", "Compute the flux", SPACE_KEYS,
+        "$FIELD_HINT Name a closed surface and its size:  sphere 2,  box 1, 2, 3  (from the " +
+            "origin), or  cylinder 1, 2  (radius, height). The flux is found by the divergence " +
+            "theorem and directly.",
+        listOf(ToolExample("Sphere", "x; y; z", "sphere 2"), ToolExample("Box", "x^2; y^2; z^2", "box 1, 2, 3"),
+            ToolExample("Cylinder", "x y; y z; z x", "cylinder 1, 2")),
+        box1 = "surface", wideBox = true,
+    ),
+    ToolOp(
+        "stokes", "Stokes' theorem", "Field  P; Q; R", "-y; x; z", "Compute both sides", SPACE_KEYS,
+        "$FIELD_HINT Name a surface whose edge is a circle in the plane z = 0:  hemisphere 1,  " +
+            "disk 3,  or  paraboloid 2  (z = 4 - x^2 - y^2).",
+        listOf(ToolExample("Hemisphere", "-y; x; z", "hemisphere 1"), ToolExample("Paraboloid", "z; x; y", "paraboloid 2"),
+            ToolExample("Disc", "y^2; x; z^2", "disk 3")),
+        box1 = "surface", wideBox = true,
+    ),
+)
+
 private fun operationsFor(mode: Mode): List<ToolOp> = when (mode) {
     Mode.Calculus -> CALCULUS
     Mode.Series -> SERIES
@@ -319,10 +461,12 @@ private fun operationsFor(mode: Mode): List<ToolOp> = when (mode) {
     Mode.Special -> SPECIAL
     Mode.FourierTransform -> FOURIER_TRANSFORM
     Mode.Recurrence -> RECURRENCE
+    Mode.Dynamics -> DYNAMICS
+    Mode.Vector -> VECTOR
     else -> LINEAR_ALGEBRA
 }
 
-/** The input form shared by all the math tools (linear algebra through difference equations). */
+/** The input form shared by all the math tools (linear algebra through vector calculus). */
 @Composable
 fun ToolInputScreen(model: SolverViewModel) {
     val keyboard = LocalSoftwareKeyboardController.current
@@ -424,7 +568,16 @@ fun ToolInputScreen(model: SolverViewModel) {
 
                 val first = op.box1
                 val second = op.box2
-                if (first != null) {
+                if (first != null && second != null && op.wideBox) {
+                    // Two long entries: one above the other, each across the full width.
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.padding(top = 12.dp),
+                    ) {
+                        ToolBox(model.x0, { model.x0 = it }, first, Modifier.fillMaxWidth())
+                        ToolBox(model.y0, { model.y0 = it }, second, Modifier.fillMaxWidth())
+                    }
+                } else if (first != null) {
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         modifier = Modifier.padding(top = 12.dp),

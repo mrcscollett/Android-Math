@@ -61,11 +61,12 @@ def pde(kind, f_text, g_text="", p1="", p2="", bc="", t1="", t2=""):
 
 
 def _tool_module(name):
-    from . import (calculus as calculus_tools, complexnum, ftransform, linalg as linear_algebra,
-                   powerseries, recurrence, special)
+    from . import (calculus as calculus_tools, complexnum, dynamics, ftransform,
+                   linalg as linear_algebra, powerseries, recurrence, special, vector)
     modules = {"linalg": linear_algebra, "calculus": calculus_tools,
                "series": powerseries, "complex": complexnum,
-               "special": special, "ftransform": ftransform, "recurrence": recurrence}
+               "special": special, "ftransform": ftransform, "recurrence": recurrence,
+               "dynamics": dynamics, "vector": vector}
     if name not in modules:
         raise InputError("Unknown tool.")
     return modules[name]
@@ -73,7 +74,7 @@ def _tool_module(name):
 
 def tool(name, operation, text, extra1="", extra2=""):
     """The stand-alone math tools. `name` is linalg, calculus, series, complex,
-    special, ftransform or recurrence.
+    special, ftransform, recurrence, dynamics or vector.
 
     linalg: rref, solve (extra1 = b), det, inverse, eigen, spaces, independence, wronskian.
     calculus: integral, definite (extra1, extra2 = limits), fractions, derivative.
@@ -83,6 +84,14 @@ def tool(name, operation, text, extra1="", extra2=""):
         sturm (text = "a; b; c; d", extra1, extra2 = interval ends), expansion (extra1 = terms).
     ftransform: forward, inverse (in w, with i), sine, cosine, heat (extra1 = k).
     recurrence: solve (text such as "a(n+2) = a(n+1) + a(n)", extra1 = starting values).
+    dynamics: lyapunov (text = "f; g", extra1 = your V(x, y), extra2 = equilibrium "a, b"),
+        conservative (text = F(x) in x'' = F(x)), cycles (text = "f; g"),
+        bifurcation (text = f(x, m)), hopf (text = "f; g" with m, extra1 = m for the graph).
+    vector: gradient (text = f, extra1 = point, extra2 = direction), divcurl (text = "P; Q[; R]"),
+        line (text = field or scalar, extra1 = curve "x(t); y(t)", extra2 = "a, b"),
+        double (text = f(x, y), extra1 = x limits, extra2 = y limits), polar (extra1 = r limits,
+        extra2 = angle limits), green (text = "P; Q", extra1 = region), flux and stokes
+        (text = "P; Q; R", extra1 = surface such as "sphere 2").
     """
     def work():
         module = _tool_module(name)

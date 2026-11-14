@@ -38,6 +38,14 @@ What it covers so far:
   Laplace's equation on a disk, the method of characteristics for first-order
   equations, classification of second-order equations, and the explicit and
   Crank-Nicolson finite-difference schemes for the heat equation.
+- **Stability and dynamics**: Lyapunov's direct method (quadratic candidates
+  or your own function), conservative systems and their energy, limit cycles
+  (Bendixson, polar coordinates, Lienard), bifurcations of a one-parameter
+  equation with a diagram, and the Hopf bifurcation.
+- **Vector calculus**: gradient, directional derivative, Laplacian, divergence,
+  curl and potential functions; line integrals; double integrals in Cartesian
+  and polar coordinates; Green's theorem, the divergence theorem and Stokes'
+  theorem on standard regions, each computed both ways.
 - **Numerical methods**: Euler, improved Euler, midpoint, RK4,
   Adams-Bashforth and adaptive RK45, with step tables and the error against
   the exact solution when one is known.
