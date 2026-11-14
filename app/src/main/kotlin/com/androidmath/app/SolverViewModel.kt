@@ -36,6 +36,9 @@ enum class Mode(val title: String) {
     Calculus("Calculus"),
     Series("Series"),
     Complex("Complex numbers"),
+    Special("Special functions"),
+    FourierTransform("Fourier transforms"),
+    Recurrence("Difference equations"),
 }
 
 /** The engine's name for a math-tool section, or null for the other sections. */
@@ -44,6 +47,9 @@ fun Mode.toolName(): String? = when (this) {
     Mode.Calculus -> "calculus"
     Mode.Series -> "series"
     Mode.Complex -> "complex"
+    Mode.Special -> "special"
+    Mode.FourierTransform -> "ftransform"
+    Mode.Recurrence -> "recurrence"
     else -> null
 }
 
@@ -53,6 +59,9 @@ private fun Mode.firstOperation(): String = when (this) {
     Mode.Calculus -> "integral"
     Mode.Series -> "taylor"
     Mode.Complex -> "evaluate"
+    Mode.Special -> "bessel"
+    Mode.FourierTransform -> "forward"
+    Mode.Recurrence -> "solve"
     else -> ""
 }
 
@@ -338,7 +347,8 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
             Mode.Boundary -> if (eigenMode) "eigen" else "boundary"
             // "laplace" alone already names the Laplace-transform section.
             Mode.Pde -> if (pdeKind == "laplace") "laplace_eq" else pdeKind
-            Mode.LinearAlgebra, Mode.Calculus, Mode.Series, Mode.Complex -> mode.toolName() ?: "first"
+            Mode.LinearAlgebra, Mode.Calculus, Mode.Series, Mode.Complex,
+            Mode.Special, Mode.FourierTransform, Mode.Recurrence -> mode.toolName() ?: "first"
         }
 
     /** Every input box of the current section, by the names [restore] understands. */
@@ -355,7 +365,8 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
                 fields["h"] = stepSize; fields["n"] = stepCount
             }
             Mode.Laplace -> {}
-            Mode.LinearAlgebra, Mode.Calculus, Mode.Series, Mode.Complex -> {
+            Mode.LinearAlgebra, Mode.Calculus, Mode.Series, Mode.Complex,
+            Mode.Special, Mode.FourierTransform, Mode.Recurrence -> {
                 fields["op"] = toolOp
                 fields["x0"] = x0; fields["y0"] = y0
             }
@@ -420,7 +431,8 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
             "disk" -> "Disk: u = ${equation.text} on r = $x0"
             else -> "Heat: f = ${equation.text},  L = $x0,  k = $y0"
         }
-        Mode.LinearAlgebra, Mode.Calculus, Mode.Series, Mode.Complex ->
+        Mode.LinearAlgebra, Mode.Calculus, Mode.Series, Mode.Complex,
+            Mode.Special, Mode.FourierTransform, Mode.Recurrence ->
             "$toolOp: " + equation.text.replace("\n", "; ") +
                 (if (x0.isNotBlank()) ",  $x0" else "") + (if (y0.isNotBlank()) ",  $y0" else "")
         Mode.FirstOrder, Mode.SecondOrder -> equation.text +
@@ -465,6 +477,9 @@ class SolverViewModel(app: Application) : AndroidViewModel(app) {
                 "calculus" -> Mode.Calculus
                 "series" -> Mode.Series
                 "complex" -> Mode.Complex
+                "special" -> Mode.Special
+                "ftransform" -> Mode.FourierTransform
+                "recurrence" -> Mode.Recurrence
                 else -> Mode.FirstOrder
             }
         )

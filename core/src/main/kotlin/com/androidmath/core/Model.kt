@@ -28,6 +28,11 @@ data class SolveResult(
     val equilibria: List<Equilibrium> = emptyList(),
     /** Half-length of the interval of interest (Fourier, boundary, eigenvalue problems). */
     val span: Double? = null,
+    /**
+     * Names for what the graph draws, when the engine knows better than the
+     * app: "exact" for the main curve and "points" for the plotted points.
+     */
+    val legends: Map<String, String> = emptyMap(),
     /** For kind "pde": heat, wave, laplace, characteristics, classify, fd or disk. */
     val pde: String = "",
     /** For PDEs: the region the solution is drawn on and its range of values. */
@@ -130,9 +135,12 @@ data class TimeLevel(val t: Double, val points: List<List<Double>> = emptyList()
     }
 }
 
-/** One selectable curve: [n] terms of a Fourier series, or the n-th eigenfunction. */
+/**
+ * One selectable curve: [n] terms of a Fourier series, or the n-th eigenfunction.
+ * [label], when given, is what the slider and legend show for it (such as "t = 0.5").
+ */
 @Serializable
-data class PartialSum(val n: Int, val expr: String)
+data class PartialSum(val n: Int, val expr: String, val label: String? = null)
 
 @Serializable
 data class PreviewResult(

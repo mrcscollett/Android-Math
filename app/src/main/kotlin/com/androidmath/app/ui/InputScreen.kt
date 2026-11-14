@@ -503,7 +503,8 @@ fun InputScreen(model: SolverViewModel) {
                     Mode.Boundary -> emptyList()
                     Mode.Pde -> emptyList()
                     // The math tools never reach this screen; they have their own form.
-                    Mode.LinearAlgebra, Mode.Calculus, Mode.Series, Mode.Complex -> emptyList()
+                    Mode.LinearAlgebra, Mode.Calculus, Mode.Series, Mode.Complex,
+                    Mode.Special, Mode.FourierTransform, Mode.Recurrence -> emptyList()
                 }
                 if (boundary && !eigen) {
                     for (example in BOUNDARY_EXAMPLES) {

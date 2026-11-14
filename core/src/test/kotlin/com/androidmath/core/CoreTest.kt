@@ -542,4 +542,40 @@ class PdeTest {
         assertEquals(points[0], points[6], 0.0)
         assertEquals(points[1], points[7], 0.0)
     }
+
+    @Test fun parsesSpecialFunctionsTransformsAndRecurrences() {
+        val legendre = EngineJson.solveResult(fixture("tool_special.json"))
+        val curves = legendre.applicableMethods.single().plot!!.partials
+        assertEquals(listOf(0, 1, 2, 3), curves.map { it.n })
+        assertEquals("P\u2083", curves[3].label)
+        // P3(x) = (5x^3 - 3x)/2
+        assertEquals(-0.4375, Expr.parseOrNull(curves[3].expr)!!.eval(0.5, 0.0, 0.0), 1e-12)
+
+        val bessel = EngineJson.solveResult(fixture("tool_bessel.json"))
+        assertEquals("J", bessel.legends["exact"])
+        assertEquals("Y", bessel.legends["points"])
+        val j0 = Expr.parseOrNull(bessel.applicableMethods.single().plot!!.particularExpr)!!
+        assertEquals(1.0, j0.eval(0.0, 0.0, 0.0), 1e-12)
+        assertEquals(0.0, j0.eval(2.404825557695773, 0.0, 0.0), 1e-9)      // first zero of J0
+        assertEquals(-0.2459357644513483, j0.eval(10.0, 0.0, 0.0), 1e-7)
+        assertFalse(j0.eval(31.0, 0.0, 0.0).isFinite())                    // blank beyond the range
+        assertTrue(bessel.applicableMethods.single().plot!!.points.size > 100)
+
+        val heat = EngineJson.solveResult(fixture("tool_ftransform.json"))
+        val times = heat.applicableMethods.single().plot!!.partials
+        assertTrue(times.size >= 4)
+        assertTrue(times.all { it.label!!.startsWith("t = ") })
+        val early = Expr.parseOrNull(times.first().expr)!!
+        val late = Expr.parseOrNull(times.last().expr)!!
+        // A pulse of height 1 on (-1, 1) spreads out: the centre cools, the outside warms.
+        assertTrue(early.eval(0.0, 0.0, 0.0) > 0.99)
+        assertTrue(late.eval(0.0, 0.0, 0.0) < early.eval(0.0, 0.0, 0.0))
+        assertTrue(late.eval(3.0, 0.0, 0.0) > early.eval(3.0, 0.0, 0.0))
+
+        val fibonacci = EngineJson.solveResult(fixture("tool_recurrence.json"))
+        assertEquals(listOf("characteristic", "iteration"), fibonacci.applicableMethods.map { it.id })
+        val terms = fibonacci.applicableMethods[0].plot!!.pointArray()
+        assertEquals(55.0, terms[2 * 10 + 1], 1e-9)
+        assertEquals("Terms of the sequence", fibonacci.legends["points"])
+    }
 }

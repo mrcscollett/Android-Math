@@ -156,7 +156,8 @@ private fun GraphTab(model: SolverViewModel) {
     val overlay = remember(method, partialIndex) {
         Expr.parseOrNull(partials.getOrNull(partialIndex)?.expr)
     }
-    val wide = result.kind == "fourier" || result.kind == "eigen" || result.kind == "boundary"
+    val wide = result.kind == "fourier" || result.kind == "eigen" || result.kind == "boundary" ||
+        (result.kind == "tool" && result.span != null)
     val halfWidth = if (wide) ((result.span ?: 2.5) * 2).coerceIn(1.0, 100.0) else 5.0
 
     Column(Modifier.fillMaxSize()) {
@@ -206,7 +207,9 @@ private fun GraphTab(model: SolverViewModel) {
                 val current = partials[partialIndex].n
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        if (result.kind == "eigen") "n = $current" else "N = $current",
+                        // The engine may name each curve itself (a time, a polynomial).
+                        partials[partialIndex].label
+                            ?: if (result.kind == "eigen") "n = $current" else "N = $current",
                         modifier = Modifier.width(96.dp),
                     )
                     Slider(
@@ -228,7 +231,7 @@ private fun GraphTab(model: SolverViewModel) {
                 if (exact != null) {
                     Legend(
                         MaterialTheme.colorScheme.primary,
-                        when (result.kind) {
+                        result.legends["exact"] ?: when (result.kind) {
                             "transform" -> "Function of t"
                             "fourier" -> "f(x) (periodic)"
                             "boundary" -> "Solution"
@@ -245,15 +248,17 @@ private fun GraphTab(model: SolverViewModel) {
                 if (overlay != null && partials.isNotEmpty()) {
                     Legend(
                         MaterialTheme.colorScheme.tertiary,
-                        if (result.kind == "eigen") "Eigenfunction ${partials[partialIndex].n}"
-                        else if (result.kind == "tool") "Taylor polynomial, degree ${partials[partialIndex].n}"
-                        else "Partial sum, ${partials[partialIndex].n} terms",
+                        partials[partialIndex].label
+                            ?: if (result.kind == "eigen") "Eigenfunction ${partials[partialIndex].n}"
+                            else if (result.kind == "tool") "Taylor polynomial, degree ${partials[partialIndex].n}"
+                            else "Partial sum, ${partials[partialIndex].n} terms",
                     )
                 }
                 if (points != null) {
                     Legend(
                         MaterialTheme.colorScheme.tertiary,
-                        if (result.kind == "tool") "In the complex plane" else method?.name ?: "Numerical",
+                        result.legends["points"]
+                            ?: if (result.kind == "tool") "In the complex plane" else method?.name ?: "Numerical",
                     )
                 } else if (canTap) {
                     Legend(MaterialTheme.colorScheme.tertiary, "Numerical (RK4)")

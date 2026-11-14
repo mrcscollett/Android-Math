@@ -50,6 +50,15 @@ What it covers so far:
   and interval of convergence.
 - **Complex numbers**: arithmetic, polar and exponential form, De Moivre's
   theorem, n-th roots.
+- **Special functions**: Bessel functions (series, zeros, half-integer closed
+  forms), Legendre, Hermite, Laguerre and Chebyshev polynomials, the
+  Sturm-Liouville (self-adjoint) form of an equation, Legendre expansions.
+- **Fourier transforms**: transforms and inverses with the convention
+  F(w) = integral of f(x) e^(-iwx) dx, sine and cosine transforms, and the
+  heat equation on the whole line through the heat kernel.
+- **Difference equations**: linear recurrences with constant coefficients up
+  to third order, by the characteristic equation and undetermined
+  coefficients, with starting values.
 
 ## Layout
 

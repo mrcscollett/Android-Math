@@ -61,21 +61,28 @@ def pde(kind, f_text, g_text="", p1="", p2="", bc="", t1="", t2=""):
 
 
 def _tool_module(name):
-    from . import calculus as calculus_tools, complexnum, linalg as linear_algebra, powerseries
+    from . import (calculus as calculus_tools, complexnum, ftransform, linalg as linear_algebra,
+                   powerseries, recurrence, special)
     modules = {"linalg": linear_algebra, "calculus": calculus_tools,
-               "series": powerseries, "complex": complexnum}
+               "series": powerseries, "complex": complexnum,
+               "special": special, "ftransform": ftransform, "recurrence": recurrence}
     if name not in modules:
         raise InputError("Unknown tool.")
     return modules[name]
 
 
 def tool(name, operation, text, extra1="", extra2=""):
-    """The stand-alone math tools. `name` is linalg, calculus, series or complex.
+    """The stand-alone math tools. `name` is linalg, calculus, series, complex,
+    special, ftransform or recurrence.
 
     linalg: rref, solve (extra1 = b), det, inverse, eigen, spaces, independence, wronskian.
     calculus: integral, definite (extra1, extra2 = limits), fractions, derivative.
     series: taylor (extra1 = centre, extra2 = order), convergence, radius (extra1 = centre).
     complex: evaluate, roots (extra1 = n).
+    special: bessel (text = order), legendre / hermite / laguerre / chebyshev (text = degree),
+        sturm (text = "a; b; c; d", extra1, extra2 = interval ends), expansion (extra1 = terms).
+    ftransform: forward, inverse (in w, with i), sine, cosine, heat (extra1 = k).
+    recurrence: solve (text such as "a(n+2) = a(n+1) + a(n)", extra1 = starting values).
     """
     def work():
         module = _tool_module(name)

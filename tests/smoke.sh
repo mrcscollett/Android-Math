@@ -211,4 +211,16 @@ open complex "(1+2*i)/(3-i)" "" "" 0 'text="Steps"' "--es mode complex --es op e
 expect complex 'text="Complex number"'
 expect complex 'Multiply by the conjugate'
 
+open special "3" "" "" 0 'text="Steps"' "--es mode special --es op legendre"
+expect special 'text="Legendre polynomials"'
+expect special 'Rodrigues'
+
+open ftransform "e^(-x^2)" "" "" 0 'text="Steps"' "--es mode ftransform --es op forward"
+expect ftransform 'text="Fourier transform"'
+expect ftransform 'text="Defining integral"'
+
+open recurrence "a(n+2)=a(n+1)+a(n)" "" "" 0 'text="Steps"' "--es mode recurrence --es op solve --es x0 '0,1'"
+expect recurrence 'text="Difference equation"'
+expect recurrence 'Write the characteristic equation'
+
 exit $fail

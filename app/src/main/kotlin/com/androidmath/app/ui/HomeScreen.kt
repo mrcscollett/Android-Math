@@ -106,6 +106,21 @@ private val TOOL_SECTIONS = listOf(
         "Arithmetic, polar and exponential form, De Moivre's theorem, roots",
         Mode.Complex,
     ),
+    Section(
+        "Special functions",
+        "Bessel functions, Legendre and other orthogonal polynomials, Sturm\u2013Liouville form",
+        Mode.Special,
+    ),
+    Section(
+        "Fourier transforms",
+        "Transforms and inverses, sine and cosine transforms, heat flow on the whole line",
+        Mode.FourierTransform,
+    ),
+    Section(
+        "Difference equations",
+        "Linear recurrences such as Fibonacci: closed formulas and first terms",
+        Mode.Recurrence,
+    ),
 )
 
 private val UPCOMING_SECTIONS = listOf(

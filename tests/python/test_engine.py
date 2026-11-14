@@ -1949,6 +1949,373 @@ def test_tool_api_and_previews():
     assert "Unknown symbol" in _tool("calculus", "integral", "i x")["error"]
 
 
+# ---- math tools 2: special functions, Fourier transforms, recurrences ------
+
+def _tool(*args):
+    return json.loads(tool(*args))
+
+
+def _expr_fn(text):
+    """A float function of x for a plot string (with the unit step)."""
+    expr = sp.sympify(text, locals={"x": X})
+    return sp.lambdify(X, expr, [{"Heaviside": lambda v, *rest: 0.0 if v < 0 else 1.0}, "mpmath"])
+
+
+@pytest.mark.parametrize("order", ["0", "1", "3", "6"])
+def test_bessel_whole_order(order):
+    r = _tool("special", "bessel", order)
+    assert r["ok"], r.get("error")
+    m = r["methods"][0]
+    assert m["verified"] is True
+    n = int(order)
+    plotted = _expr_fn(m["plot"]["particular_expr"])
+    for value in (-28.0, -9.3, -0.7, 0.2, 2.4, 11.1, 19.7, 29.5):
+        assert abs(plotted(value) - mpmath.besselj(n, value)) < 5e-5
+    for xv, yv in m["plot"]["points"][::17]:           # Y_n is sampled, not a formula
+        assert abs(yv - mpmath.bessely(n, xv)) < 1e-9
+    rows = next(s for s in m["steps"] if s["title"] == "Zeros")["table"]["rows"]
+    for k, row in enumerate(rows, start=1):
+        assert abs(float(row[1]) - mpmath.besseljzero(n, k)) < 1e-6
+        assert abs(mpmath.besselj(n, float(row[1]))) < 1e-5
+        assert abs(mpmath.bessely(n, float(row[2]))) < 1e-5
+
+
+@pytest.mark.parametrize("order", ["1/2", "3/2", "5/2"])
+def test_bessel_half_integer_closed_form(order):
+    r = _tool("special", "bessel", order)
+    m = r["methods"][0]
+    nu = float(sp.Rational(order))
+    plotted = _expr_fn(m["plot"]["particular_expr"])
+    for value in (0.4, 1.7, 6.2, 14.5):
+        assert abs(plotted(value) - mpmath.besselj(nu, value)) < 1e-10
+    assert "Closed form" in [s["title"] for s in m["steps"]]
+    assert "\\sin" in m["particular_latex"] or "\\cos" in m["particular_latex"]
+
+
+def test_bessel_errors():
+    assert "half-integer" in _tool("special", "bessel", "1/3")["error"]
+    assert "half-integer" in _tool("special", "bessel", "7")["error"]
+    assert not _tool("special", "bessel", "")["ok"]
+
+
+@pytest.mark.parametrize("family,reference", [
+    ("legendre", mpmath.legendre), ("hermite", mpmath.hermite),
+    ("laguerre", lambda n, t: mpmath.laguerre(n, 0, t)), ("chebyshev", mpmath.chebyt),
+])
+def test_orthogonal_polynomials(family, reference):
+    for n in (0, 1, 4, 7):
+        r = _tool("special", family, str(n))
+        assert r["ok"], r.get("error")
+        m = r["methods"][0]
+        assert m["verified"] is True
+        partials = m["plot"]["partials"]
+        assert [p["n"] for p in partials] == list(range(n + 1))
+        top = _expr_fn(partials[-1]["expr"])
+        for value in (-0.9, -0.3, 0.2, 0.75):
+            assert abs(top(value) - reference(n, value)) < 1e-9 * (1 + abs(reference(n, value)))
+    assert "whole number" in _tool("special", family, "9")["error"]
+
+
+def test_legendre_orthogonality_and_rodrigues():
+    m = _tool("special", "legendre", "3")["methods"][0]
+    assert m["particular_latex"] == "P_{3}(x) = \\frac{5 x^{3}}{2} - \\frac{3 x}{2}"
+    assert "Rodrigues' formula" in [s["title"] for s in m["steps"]]
+    p = [_expr_fn(q["expr"]) for q in m["plot"]["partials"]]
+    for i in range(4):
+        for j in range(4):
+            value = mpmath.quad(lambda t: p[i](t) * p[j](t), [-1, 1])
+            want = 2.0 / (2 * i + 1) if i == j else 0.0
+            assert abs(value - want) < 1e-10
+
+
+@pytest.mark.parametrize("coeffs,lo,hi,kind", [
+    ("x^2; x; -4; x^2", "0", "1", "singular"),            # Bessel, order 2
+    ("1; 0; 0; 1", "0", "pi", "regular"),
+    ("1-x^2; -2x; 0; 1", "-1", "1", "singular"),          # Legendre
+    ("1; -2x; 0; 1", "-oo", "oo", "singular"),            # Hermite
+    ("x; 1-x; 0; 1", "0", "oo", "singular"),              # Laguerre
+    ("1; 2; 3; 1", "0", "1", "regular"),
+])
+def test_sturm_liouville_form_expands_back(coeffs, lo, hi, kind):
+    r = _tool("special", "sturm", coeffs, lo, hi)
+    assert r["ok"], r.get("error")
+    m = r["methods"][0]
+    assert m["verified"] is True
+    text = " ".join(s["text"] for s in m["steps"])
+    assert "problem is %s" % kind in text
+    # Independent check: rebuild p, q, w from the steps' formulas by redoing the algebra.
+    a, b, c, d = (sp.sympify(part.replace("^", "**").replace("2x", "2*x"), locals={"x": X})
+                  for part in coeffs.split(";"))
+    p = sp.exp(sp.integrate(b / a, X))
+    y = sp.Function("y")(X)
+    lam = sp.Symbol("lambda")
+    expanded = sp.diff(p * y.diff(X), X) + (p * c / a + lam * p * d / a) * y
+    assert sp.simplify(expanded - p / a * (a * y.diff(X, 2) + b * y.diff(X) + (c + lam * d) * y)) == 0
+
+
+def test_sturm_weight_is_positive_and_errors():
+    m = _tool("special", "sturm", "1-x^2; -2x; 0; 1", "-1", "1")["methods"][0]
+    assert "\\left(1 - x^{2}\\right)\\,y'" in m["particular_latex"]
+    assert "four coefficients" in _tool("special", "sturm", "1; 2")["error"]
+    assert "cannot be 0" in _tool("special", "sturm", "0; 1; 1; 1")["error"]
+    assert "less than" in _tool("special", "sturm", "1; 0; 0; 1", "2", "1")["error"]
+
+
+@pytest.mark.parametrize("text,count", [("x^3", "4"), ("e^x", "7"), ("abs(x)", "7"),
+                                        ("sin(pi x)", "8"), ("u(x)", "9")])
+def test_legendre_expansion(text, count):
+    r = _tool("special", "expansion", text, count)
+    assert r["ok"], r.get("error")
+    m = r["methods"][0]
+    assert m["verified"] is True
+    f = _expr_fn(m["plot"]["particular_expr"])
+    rows = next(s for s in m["steps"] if "table" in s)["table"]["rows"]
+    assert len(rows) == int(count)
+    partials = [_expr_fn(p["expr"]) for p in m["plot"]["partials"]]
+    points = (-0.7, -0.35, 0.3, 0.65)
+    errors = [max(abs(s(v) - f(v)) for v in points) for s in partials]
+    assert errors[-1] < errors[0] or errors[0] < 1e-12
+    if text in ("x^3", "e^x", "sin(pi x)"):
+        assert errors[-1] < 2e-3
+    # The mask divides by a step that is 0 outside [-1, 1], which the app's
+    # evaluator turns into a gap in the curve (Python raises instead).
+    with pytest.raises(ZeroDivisionError):
+        partials[-1](1.5)
+
+
+def test_legendre_expansion_coefficients_by_quadrature():
+    r = _tool("special", "expansion", "e^x", "5")
+    exprs = [_expr_fn(p["expr"]) for p in r["methods"][0]["plot"]["partials"]]
+    # c_n recovered from the plotted partial sum by projecting onto P_n.
+    top = exprs[-1]
+    for n in range(5):
+        got = (2 * n + 1) / 2 * mpmath.quad(lambda t: top(t) * mpmath.legendre(n, t), [-1, 1])
+        want = (2 * n + 1) / 2 * mpmath.quad(lambda t: mpmath.exp(t) * mpmath.legendre(n, t), [-1, 1])
+        assert abs(got - want) < 1e-9
+
+
+def _ft_reference(fn, omega, cuts):
+    re = mpmath.quad(lambda t: fn(t) * mpmath.cos(omega * t), cuts)
+    im = mpmath.quad(lambda t: fn(t) * mpmath.sin(omega * t), cuts)
+    return complex(re, -im)
+
+
+FORWARD_FT = [
+    ("e^(-x^2)", lambda t: mpmath.exp(-t * t), [-12, 0, 12]),
+    ("e^(-abs(x))", lambda t: mpmath.exp(-abs(t)), [-50, 0, 50]),
+    ("u(x) e^(-2x)", lambda t: mpmath.exp(-2 * t) if t >= 0 else 0, [0, 30]),
+    ("u(x+1) - u(x-1)", lambda t: 1.0, [-1, 1]),
+    ("u(x-1) - u(x-3)", lambda t: 1.0, [1, 3]),
+    ("(1 - abs(x))(u(x+1) - u(x-1))", lambda t: 1 - abs(t), [-1, 0, 1]),
+    ("e^(-(x-1)^2)", lambda t: mpmath.exp(-(t - 1) ** 2), [-12, 1, 14]),
+    ("x e^(-x^2)", lambda t: t * mpmath.exp(-t * t), [-12, 0, 12]),
+    ("e^(-3abs(x)) cos(2x)", lambda t: mpmath.exp(-3 * abs(t)) * mpmath.cos(2 * t), [-20, 0, 20]),
+]
+
+
+@pytest.mark.parametrize("text,fn,cuts", FORWARD_FT)
+def test_fourier_transform_matches_quadrature(text, fn, cuts):
+    from deengine import ftransform
+    from deengine.parsing import parse_expression
+    r = _tool("ftransform", "forward", text)
+    assert r["ok"], r.get("error")
+    m = method(r, "integral")
+    assert m["verified"] is True
+    f, symbols = parse_expression(text, ["x"])
+    value, _ = ftransform._forward_value(f.xreplace({symbols["x"]: ftransform.X}))
+    for omega in (0.4, 1.9, -3.1):
+        want = _ft_reference(fn, omega, cuts)
+        got = complex(sp.N(value.subs(ftransform.W, omega)))
+        assert abs(got - want) < 1e-7 * (1 + abs(want)), (omega, got, want)
+        # What the app graphs is F when it is real and |F| otherwise.
+        shown = _expr_fn(m["plot"]["particular_expr"])(omega)
+        assert abs(abs(shown) - abs(want)) < 1e-6 * (1 + abs(want))
+
+
+def test_fourier_transform_table_method_and_theorems():
+    r = _tool("ftransform", "forward", "e^(-(x-1)^2)")
+    table = method(r, "table")
+    assert table["applicable"] and "Shift theorem" in [s["title"] for s in table["steps"]]
+    assert method(_tool("ftransform", "forward", "x e^(-x^2)"), "table")["applicable"] is False
+    lorentz = _tool("ftransform", "forward", "1/(1+x^2)")
+    assert "\\pi e^{- \\left|{\\omega}\\right|}" in method(lorentz, "integral")["particular_latex"]
+    delta = _tool("ftransform", "forward", "delta(x-2)")
+    assert "e^{- 2 i \\omega}" in delta["methods"][0]["particular_latex"]
+    cosine = _tool("ftransform", "forward", "cos(3x)")
+    assert "\\delta\\left(\\omega - 3\\right)" in cosine["methods"][0]["particular_latex"]
+    assert cosine["methods"][0]["verified"] is None
+
+
+INVERSE_FT = ["1/(1+w^2)", "e^(-w^2/4)", "1/(2 + i w)", "2 sin(w)/w", "1/(1 + i w)^2",
+              "e^(-abs(w))", "1/((1+i w)(3 - i w))", "(1 + i w)/((1 + i w)^2 + 4)"]
+
+
+@pytest.mark.parametrize("text", INVERSE_FT)
+def test_inverse_fourier_transform_round_trip(text):
+    from deengine import ftransform
+    r = _tool("ftransform", "inverse", text)
+    assert r["ok"], r.get("error")
+    m = r["methods"][0]
+    assert m["verified"] is True
+    f = _expr_fn(m["plot"]["particular_expr"])
+    F = ftransform._parse_frequency(text)
+    slow = text == "e^(-abs(w))"
+    for omega in (0.6, 2.2):
+        if slow:    # f = 1/(pi(1+x^2)) decays slowly: integrate the oscillating tail properly
+            want = 2 * mpmath.quadosc(lambda t: f(t) * mpmath.cos(omega * t), [0, mpmath.inf], omega=omega)
+            got = complex(want, 0)
+        else:
+            got = _ft_reference(f, omega, [-40, -3, -1, 0, 1, 3, 40])
+        want = complex(sp.N(F.subs(ftransform.W, omega)))
+        assert abs(got - want) < 1e-6 * (1 + abs(want)), (omega, got, want)
+
+
+def test_inverse_fourier_transform_forms_and_errors():
+    assert "e^{- 2 x} u\\left(x\\right)" in _tool("ftransform", "inverse", "1/(2 + i w)")["methods"][0]["particular_latex"]
+    assert "\\left|{x}\\right|" in _tool("ftransform", "inverse", "1/(1+w^2)")["methods"][0]["particular_latex"]
+    assert "\\cos{\\left(2 x \\right)}" in _tool(
+        "ftransform", "inverse", "delta(w-2) + delta(w+2)")["methods"][0]["particular_latex"]
+    assert "couldn't invert" in _tool("ftransform", "inverse", "w")["error"]
+    assert "does not die away" in _tool("ftransform", "forward", "x^2")["error"]
+    assert "Unknown symbol" in _tool("ftransform", "forward", "e^(-t^2)")["error"]
+
+
+@pytest.mark.parametrize("kind,text,fn", [
+    ("sine", "e^(-2x)", lambda t: mpmath.exp(-2 * t)),
+    ("cosine", "e^(-2x)", lambda t: mpmath.exp(-2 * t)),
+    ("sine", "x e^(-x)", lambda t: t * mpmath.exp(-t)),
+    ("cosine", "u(1 - x)", lambda t: 1.0 if t <= 1 else 0.0),
+])
+def test_sine_and_cosine_transforms(kind, text, fn):
+    r = _tool("ftransform", kind, text)
+    assert r["ok"], r.get("error")
+    shown = _expr_fn(r["methods"][0]["plot"]["particular_expr"])
+    wave = mpmath.sin if kind == "sine" else mpmath.cos
+    for omega in (0.5, 1.8, 4.0):
+        want = mpmath.quad(lambda t: fn(t) * wave(omega * t), [0, 1, 40])
+        assert abs(shown(omega) - want) < 1e-6
+    assert "does not converge" in _tool("ftransform", "sine", "1")["error"]
+
+
+@pytest.mark.parametrize("text,k,fn,cuts", [
+    ("e^(-x^2)", "1", lambda z: mpmath.exp(-z * z), []),
+    ("u(x)", "2", lambda z: 1.0 if z >= 0 else 0.0, [0]),
+    ("u(x+1) - u(x-1)", "", lambda z: 1.0 if -1 <= z <= 1 else 0.0, [-1, 1]),
+    ("e^(-abs(x))", "1/2", lambda z: mpmath.exp(-abs(z)), [0]),
+])
+def test_heat_equation_on_the_line(text, k, fn, cuts):
+    r = _tool("ftransform", "heat", text, k)
+    assert r["ok"], r.get("error")
+    m = r["methods"][0]
+    assert m["verified"] is True
+    kv = float(sp.Rational(k)) if k else 1.0
+    partials = m["plot"]["partials"]
+    assert len(partials) >= 4 and all(p["label"].startswith("t = ") for p in partials)
+    assert [p["n"] for p in partials] == list(range(1, len(partials) + 1))
+    for p in partials:
+        tv = float(sp.Rational(p["label"][4:]))
+        u = _expr_fn(p["expr"])
+        for xv in (-1.4, 0.3, 2.1):
+            # Direct quadrature of the heat-kernel integral.
+            want = mpmath.quad(lambda z: fn(z) * mpmath.exp(-(xv - z) ** 2 / (4 * kv * tv))
+                               / mpmath.sqrt(4 * mpmath.pi * kv * tv),
+                               sorted(set([xv - 40, xv, xv + 40] + cuts)))
+            assert abs(u(xv) - want) < 3e-5, (p["label"], xv, u(xv), want)
+    # The PDE itself, by finite differences between two of the plotted times is too coarse;
+    # check u_t = k u_xx on the closed form for the Gaussian instead.
+    if text == "e^(-x^2)":
+        t = sp.Symbol("t", positive=True)
+        u = sp.exp(-X**2 / (4 * t + 1)) / sp.sqrt(4 * t + 1)
+        assert sp.simplify(u.diff(t) - u.diff(X, 2)) == 0
+        assert "\\sqrt{4 t + 1}" in m["particular_latex"]
+
+
+def test_heat_on_the_line_errors():
+    assert "positive" in _tool("ftransform", "heat", "e^(-x^2)", "-1")["error"]
+    assert not _tool("ftransform", "heat", "e^(x^2)", "1")["ok"]
+
+
+RECURRENCES = [
+    ("a(n+2) = a(n+1) + a(n)", "0, 1", [-1, -1, 1], lambda n: 0),                    # Fibonacci
+    ("a(n+1) = 2a(n) + 3", "1", [-2, 1], lambda n: 3),
+    ("a(n+2) - 4a(n+1) + 4a(n) = 2^n", "0, 1", [4, -4, 1], lambda n: 2**n),          # resonant
+    ("a(n+2) + a(n) = 0", "1, 0", [1, 0, 1], lambda n: 0),                           # complex roots
+    ("a(n+2) = 2a(n+1) - 2a(n)", "1, 1", [2, -2, 1], lambda n: 0),                   # complex roots
+    ("a(n) = 3a(n-1) - 2a(n-2) + n", "0, 1", [2, -3, 1], lambda n: n + 2),           # resonant with 1^n
+    ("a(n+3) - 6a(n+2) + 11a(n+1) - 6a(n) = 0", "1, 0, 2", [-6, 11, -6, 1], lambda n: 0),
+    ("a(n+2) - 5a(n+1) + 6a(n) = n 3^n", "1, 2", [6, -5, 1], lambda n: n * 3**n),    # resonant
+    ("a(n+1) = a(n) + n^2", "0", [-1, 1], lambda n: n * n),
+    ("a(n+1) = a(n)/2 + 1", "5", [sp.Rational(-1, 2), 1], lambda n: 1),
+    ("a(n+2) - a(n) = 2^n + 1", "0, 0", [-1, 0, 1], lambda n: 2**n + 1),
+]
+
+
+@pytest.mark.parametrize("text,start,coeffs,g", RECURRENCES)
+def test_recurrence_formula_matches_direct_iteration(text, start, coeffs, g):
+    r = _tool("recurrence", "solve", text, start)
+    assert r["ok"], r.get("error")
+    m = method(r, "characteristic")
+    assert m["applicable"] and m["verified"] is True
+    # Independent iteration with exact rationals, straight from the coefficients.
+    values = [sp.Rational(v.strip()) for v in start.split(",")]
+    order = len(coeffs) - 1
+    while len(values) < 30:
+        k = len(values) - order
+        values.append((g(k) - sum(coeffs[j] * values[k + j] for j in range(order))) / coeffs[order])
+    n = sp.Symbol("n")
+    latex_free = m["plot"]["points"]
+    for xv, yv in latex_free:
+        assert abs(yv - float(values[int(xv)])) < 1e-6 * (1 + abs(float(values[int(xv)])))
+    rows = next(s for s in m["steps"] if s["title"] == "First terms")["table"]["rows"]
+    for k, shown in rows:
+        assert abs(float(shown) - float(values[int(k)])) < 1e-5 * (1 + abs(float(values[int(k)])))
+    # The closed formula itself, re-derived from the engine's solver, for 30 terms.
+    from deengine import recurrence
+    cs, gg, nn = recurrence.parse(text)
+    assert [sp.nsimplify(c) for c in cs] == [sp.nsimplify(c) for c in coeffs] or \
+        [sp.nsimplify(-c) for c in cs] == [sp.nsimplify(c) for c in coeffs]
+    iteration = method(r, "iteration")
+    assert iteration["applicable"]
+    assert abs(float(iteration["particular_latex"].split("=")[1]) - float(values[15])) < 1e-4 * (1 + abs(float(values[15])))
+
+
+def test_recurrence_closed_forms_and_general_solution():
+    fib = method(_tool("recurrence", "solve", "a(n+2) = a(n+1) + a(n)", "0, 1"), "characteristic")
+    assert "\\sqrt{5}" in fib["particular_latex"]
+    general = _tool("recurrence", "solve", "a(n+2) = a(n+1) + a(n)")
+    m = method(general, "characteristic")
+    assert "C_{1}" in m["particular_latex"] and m["verified"] is True and m["plot"]["points"] == []
+    assert [x["id"] for x in general["methods"]] == ["characteristic"]
+    resonant = method(_tool("recurrence", "solve", "a(n+2) - 4a(n+1) + 4a(n) = 2^n", "0, 1"), "characteristic")
+    guess = next(s for s in resonant["steps"] if s["title"] == "Guess a particular solution")
+    assert "multiplied by" in guess["text"]
+    spin = method(_tool("recurrence", "solve", "a(n+2) + a(n) = 0", "1, 0"), "characteristic")
+    assert "\\cos" in spin["particular_latex"]
+    decay = method(_tool("recurrence", "solve", "a(n+1) = a(n)/2", "8"), "characteristic")
+    assert "tends to 0" in " ".join(s["text"] for s in decay["steps"])
+
+
+def test_recurrence_limits_and_errors():
+    cubic = _tool("recurrence", "solve", "a(n+3) = a(n+1) + a(n)", "1, 1, 1")
+    assert method(cubic, "characteristic")["applicable"] is False
+    assert method(cubic, "iteration")["applicable"]
+    odd = _tool("recurrence", "solve", "a(n+1) = a(n) + sin(n)", "0")
+    assert method(odd, "characteristic")["applicable"] is False
+    for text, start, fragment in [
+        ("a(n+1) = a(n)^2", "1", "linear"),
+        ("a(n+1) = n a(n)", "1", "constants"),
+        ("a(n+2) = a(n+1) + a(n)", "1", "2 starting values"),
+        ("b(n+1) = b(n)", "1", "a(n)"),
+        ("a(n+1) + a(n)", "", "= sign"),
+        ("a(n+5) = a(n)", "", "third order"),
+        ("a(n) = 2", "", "at least two"),
+    ]:
+        r = _tool("recurrence", "solve", text, start)
+        assert not r["ok"] and fragment in r["error"], (text, r.get("error"))
+    assert json.loads(preview("a(n) = 3a(n-1) - 2a(n-2) + n", "recurrence:solve"))["latex"] == \
+        "a_{n+2} - 3 a_{n+1} + 2 a_{n} = n + 2"
+
+
 def test_export_fixtures():
     """Write sample outputs used by the Kotlin contract tests."""
     import os
@@ -2003,6 +2370,10 @@ def test_export_fixtures():
         "tool_calculus.json": ("calculus", "integral", "x cos(x^2)"),
         "tool_series.json": ("series", "taylor", "sin(x)", "", "7"),
         "tool_complex.json": ("complex", "roots", "-8", "3"),
+        "tool_special.json": ("special", "legendre", "3"),
+        "tool_bessel.json": ("special", "bessel", "0"),
+        "tool_ftransform.json": ("ftransform", "heat", "u(x+1) - u(x-1)", "1"),
+        "tool_recurrence.json": ("recurrence", "solve", "a(n+2) = a(n+1) + a(n)", "0, 1"),
     }.items():
         with open(os.path.join(out, name), "w") as fh:
             fh.write(tool(*args))

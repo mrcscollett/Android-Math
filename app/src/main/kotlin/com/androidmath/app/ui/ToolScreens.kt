@@ -203,14 +203,126 @@ private val COMPLEX = listOf(
     ),
 )
 
+private val DEGREE_KEYS = listOf("/")
+private val FREQUENCY_KEYS = listOf(
+    "w", "i", "^", "(", ")", "*", "/", "+", "-", "e^(", "sin(", "abs(", "delta(", "pi",
+)
+private val SIGNAL_KEYS = listOf(
+    "x", "^", "(", ")", "*", "/", "+", "-", "e^(", "abs(", "u(", "delta(", "sin(", "cos(", "pi",
+)
+private val RECURRENCE_KEYS = listOf("a(n)", "a(n+1)", "a(n+2)", "a(n+3)", "=", "n", "^", "+", "-", "*", "/", "(", ")")
+
+private const val POLYNOMIAL_HINT =
+    "Enter the degree n, a whole number from 0 to 8. The Graph tab steps through the " +
+        "polynomials of degree 0 up to n."
+private const val TRANSFORM_HINT =
+    "The convention is F(w) = integral of f(x) e^(-iwx) dx. Write a unit step as u(x - a), an " +
+        "absolute value as abs(x) and an impulse as delta(x - a). The function must die away " +
+        "as x grows."
+
+private fun polynomialOp(code: String, label: String, letter: String) = ToolOp(
+    code, label, "Degree n", "3", "Find $letter\u2099", DEGREE_KEYS, POLYNOMIAL_HINT,
+    listOf(ToolExample("n = 2", "2"), ToolExample("n = 3", "3"), ToolExample("n = 5", "5")),
+)
+
+private val SPECIAL = listOf(
+    ToolOp(
+        "bessel", "Bessel", "Order", "0", "Show the Bessel functions", DEGREE_KEYS,
+        "Enter the order: a whole number or a half-integer such as 1/2, from 0 to 6. The graph " +
+            "shows J as a curve and Y as points, for x up to 30.",
+        listOf(ToolExample("Order 0", "0"), ToolExample("Order 1", "1"), ToolExample("Order 1/2", "1/2"),
+            ToolExample("Order 3/2", "3/2")),
+    ),
+    polynomialOp("legendre", "Legendre", "P"),
+    polynomialOp("hermite", "Hermite", "H"),
+    polynomialOp("laguerre", "Laguerre", "L"),
+    polynomialOp("chebyshev", "Chebyshev", "T"),
+    ToolOp(
+        "sturm", "Sturm\u2013Liouville form", "a; b; c; d", "x^2; x; -4; x^2", "Rewrite the equation",
+        FUNCTION_KEYS + ";",
+        "For a y'' + b y' + (c + \u03bb d) y = 0, enter the four coefficients separated by " +
+            "semicolons. The interval is optional; write oo for infinity.",
+        listOf(
+            ToolExample("Bessel, order 2", "x^2; x; -4; x^2", "0", "1"),
+            ToolExample("Legendre", "1-x^2; -2x; 0; 1", "-1", "1"),
+            ToolExample("Hermite", "1; -2x; 0; 1", "-oo", "oo"),
+            ToolExample("y'' + \u03bby = 0", "1; 0; 0; 1", "0", "pi"),
+        ),
+        box1 = "from x =", box2 = "to x =",
+    ),
+    ToolOp(
+        "expansion", "Legendre series", "f(x) on [-1, 1]", "e^x", "Expand in Legendre polynomials",
+        FUNCTION_KEYS + listOf("abs(", "u("), "$FUNCTION_HINT The number of terms is from 1 to 9 (6 if left empty).",
+        listOf(ToolExample("e^x", "e^x", "6"), ToolExample("x^3", "x^3", "4"), ToolExample("|x|", "abs(x)", "7"),
+            ToolExample("Step", "u(x)", "9")),
+        box1 = "terms",
+    ),
+)
+
+private val FOURIER_TRANSFORM = listOf(
+    ToolOp(
+        "forward", "Transform", "f(x)", "e^(-x^2)", "Transform step by step", SIGNAL_KEYS, TRANSFORM_HINT,
+        listOf(ToolExample("Gaussian", "e^(-x^2)"), ToolExample("Two-sided exponential", "e^(-abs(x))"),
+            ToolExample("One-sided exponential", "u(x) e^(-2x)"), ToolExample("Pulse", "u(x+1) - u(x-1)"),
+            ToolExample("Triangle", "(1 - abs(x))(u(x+1) - u(x-1))"), ToolExample("Shifted", "e^(-(x-1)^2)")),
+    ),
+    ToolOp(
+        "inverse", "Inverse", "F(w)", "1/(1 + w^2)", "Invert step by step", FREQUENCY_KEYS,
+        "Write the frequency as w and the imaginary unit as i, as in 1/(2 + i w).",
+        listOf(ToolExample("1/(1 + w^2)", "1/(1 + w^2)"), ToolExample("1/(2 + i w)", "1/(2 + i w)"),
+            ToolExample("Gaussian", "e^(-w^2/4)"), ToolExample("sin(w)/w", "2 sin(w)/w"),
+            ToolExample("Two poles", "1/((1 + i w)(3 - i w))")),
+    ),
+    ToolOp(
+        "sine", "Sine transform", "f(x) for x > 0", "e^(-2x)", "Transform step by step", SIGNAL_KEYS,
+        "The sine transform is the integral of f(x) sin(wx) from 0 to infinity.",
+        listOf(ToolExample("e^(-2x)", "e^(-2x)"), ToolExample("x e^(-x)", "x e^(-x)")),
+    ),
+    ToolOp(
+        "cosine", "Cosine transform", "f(x) for x > 0", "e^(-2x)", "Transform step by step", SIGNAL_KEYS,
+        "The cosine transform is the integral of f(x) cos(wx) from 0 to infinity.",
+        listOf(ToolExample("e^(-2x)", "e^(-2x)"), ToolExample("1/(1 + x^2)", "1/(1 + x^2)"),
+            ToolExample("Pulse", "u(1 - x)")),
+    ),
+    ToolOp(
+        "heat", "Heat on the line", "Initial temperature f(x)", "e^(-x^2)", "Solve step by step", SIGNAL_KEYS,
+        "Solves u_t = k u_xx for all x with u(x, 0) = f(x). k is 1 if left empty. The Graph tab " +
+            "steps through later times.",
+        listOf(ToolExample("Gaussian", "e^(-x^2)", "1"), ToolExample("Pulse", "u(x+1) - u(x-1)", "1"),
+            ToolExample("Step", "u(x)", "1"), ToolExample("e^(-|x|)", "e^(-abs(x))", "1")),
+        box1 = "k",
+    ),
+)
+
+private val RECURRENCE = listOf(
+    ToolOp(
+        "solve", "Solve", "Recurrence", "a(n+2) = a(n+1) + a(n)", "Solve step by step", RECURRENCE_KEYS,
+        "Write the terms as a(n), a(n+1), a(n+2). The coefficients must be constants; the " +
+            "right-hand side may contain powers of n and terms such as 2^n. Give the starting " +
+            "values a(0), a(1), ... separated by commas, or leave them empty for the general solution.",
+        listOf(
+            ToolExample("Fibonacci", "a(n+2) = a(n+1) + a(n)", "0, 1"),
+            ToolExample("First order", "a(n+1) = 2a(n) + 3", "1"),
+            ToolExample("Repeated root, resonant", "a(n+2) - 4a(n+1) + 4a(n) = 2^n", "0, 1"),
+            ToolExample("Complex roots", "a(n+2) = 2a(n+1) - 2a(n)", "1, 1"),
+            ToolExample("Third order", "a(n+3) - 6a(n+2) + 11a(n+1) - 6a(n) = 0", "1, 0, 2"),
+            ToolExample("General solution", "a(n+2) - 5a(n+1) + 6a(n) = n"),
+        ),
+        box1 = "a(0), a(1), ...", wideBox = true,
+    ),
+)
+
 private fun operationsFor(mode: Mode): List<ToolOp> = when (mode) {
     Mode.Calculus -> CALCULUS
     Mode.Series -> SERIES
     Mode.Complex -> COMPLEX
+    Mode.Special -> SPECIAL
+    Mode.FourierTransform -> FOURIER_TRANSFORM
+    Mode.Recurrence -> RECURRENCE
     else -> LINEAR_ALGEBRA
 }
 
-/** The input form shared by the linear algebra, calculus, series and complex-number tools. */
+/** The input form shared by all the math tools (linear algebra through difference equations). */
 @Composable
 fun ToolInputScreen(model: SolverViewModel) {
     val keyboard = LocalSoftwareKeyboardController.current
